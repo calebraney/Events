@@ -1,8 +1,10 @@
-# Interactions Library — Claude Instructions
+# Events — Claude Instructions
 
 ## What This Repo Is
 
-A reusable Webflow interactions library. All interactions are vanilla JS + GSAP, driven entirely by `data-ix-*` attributes. No framework — components are set up in Webflow using data attributes. Built for cross-site reuse across a wide variety of Webflow projects.
+A reusable Webflow events system: recurring-event CMS logic, a month-based List View, and a Calendar. Vanilla JS + GSAP, driven entirely by `data-ix-*` attributes, no framework. Built from the same starter template as Caleb's Interactions library, so it shares that repo's conventions (see below) — but the two repos are independent; this one is not a dependency of Interactions and vice versa.
+
+Core idea: recurrence (Daily/Weekly/Monthly/Yearly + interval + skip dates + optional end date) is computed once by a shared engine (`getOccurrences(event, rangeStart, rangeEnd)`) and consumed by both the List View and the Calendar, so recurrence logic only ever lives in one place.
 
 ---
 
@@ -104,4 +106,11 @@ checkContainer(items[0], breakpoint, animationCallback);
 
 All interactions live in `src/interactions/`:
 
-`accordion`, `animations`, `banner`, `click-active`, `count-up`, `cursor`, `horizontal`, `hover-active`, `image-switch`, `lenis`, `lightbox`, `load`, `loop`, `magnetic`, `marquee`, `modal`, `mouse-over`, `page-transition`, `parallax`, `path-hover`, `play-sound`, `scroll-in`, `scroll-progress`, `scrolling`, `slider`, `sticky-nav`, `tabs`, `text-links`, `text-scrub`, `type-text`, `video-plyr`
+- `recurrence.js` — shared recurrence engine (`getOccurrences`), no DOM, used by both interactions below
+- `event-data.js` — shared data lookup (`whenEvents`); finds the one `[data-ix-events="data-wrap"]` Collection List on the page, used by both interactions below so they can't read two different sources
+- `event-list.js` — month-based List View (`data-ix-events-layout="list"`), expands/filters a native Webflow Collection List in place
+- `calendar.js` — month grid Calendar (`data-ix-events-layout="calendar"`), ported from the original Webflow AI React component
+
+Both `event-list.js` and `calendar.js` read `[data-ix-events="wrap"]` elements and self-filter on `data-ix-events-layout`, so a List View / Calendar toggle on one page shares one attribute contract instead of two.
+
+The List View's cards can live in the same Collection List as the JSON data, or in a completely separate one — `event-list.js` auto-detects per item (JSON nested in the item = combined; no JSON = looks up by `data-ix-events-slug` against the page's data-wrap instead).

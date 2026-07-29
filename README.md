@@ -1,7 +1,3 @@
-# An internal GSAP Interactions library
+# Events
 
-This is an interaction library built by Caleb Raney
-
-## Documentation
-
-For documentation visit [cr-ix.webflow.io](cr-ix.webflow.io)
+A reusable Webflow events system built by Caleb Raney: recurring-event CMS logic, a month-based list view, and a calendar, driven by `data-ix-*` attributes and a shared recurrence engine.

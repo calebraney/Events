@@ -1,8 +1,8 @@
 {
-  "name": "starter",
-  "version": "1.0.4",
-  "description": "Developer starter template for Caleb Raney projects.",
-  "homepage": "https://github.com/calebraney/Test-Starter#readme",
+  "name": "events",
+  "version": "1.0.0",
+  "description": "Reusable Webflow events system: recurring-event CMS logic, a month list view, and a calendar, built by Caleb Raney.",
+  "homepage": "https://github.com/calebraney/Events#readme",
   "license": "ISC",
   "keywords": [],
   "author": {
