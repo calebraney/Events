@@ -1,4 +1,4 @@
-import { attr, getIxConfig, checkRunProp } from '../utilities';
+import { attr } from './utilities';
 import { getOccurrences } from './recurrence';
 import { whenEvents } from './event-data';
 
@@ -49,9 +49,6 @@ const EVENT_COLOR_VARS = [
 let stylesInjected = false;
 
 export const calendar = function () {
-  const ixEnabled = getIxConfig(ANIMATION_ID, true);
-  if (ixEnabled === false) return;
-
   const wraps = [...document.querySelectorAll(WRAP)].filter(
     (wrap) => wrap.getAttribute('data-ix-events-layout') === LAYOUT
   );
@@ -59,10 +56,7 @@ export const calendar = function () {
 
   injectStyles();
 
-  wraps.forEach((wrap) => {
-    if (checkRunProp(wrap, ANIMATION_ID) === false) return;
-    initCalendar(wrap);
-  });
+  wraps.forEach((wrap) => initCalendar(wrap));
 };
 
 function initCalendar(wrap) {

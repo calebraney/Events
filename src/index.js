@@ -1,5 +1,5 @@
-import { eventList } from './interactions/event-list';
-import { calendar } from './interactions/calendar';
+import { eventList } from './event-list';
+import { calendar } from './calendar';
 
 document.addEventListener('DOMContentLoaded', function () {
   // Comment out for production

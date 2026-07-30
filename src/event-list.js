@@ -1,9 +1,9 @@
-import { attr, getIxConfig, checkRunProp } from '../utilities';
+import { attr } from './utilities';
 import { getOccurrences, parseEventFromJSON } from './recurrence';
 import { whenEvents } from './event-data';
 
 // ============================================================================
-// event-list: month-based List View (data-ix-events-layout="list")
+// event-list: month or week List View (data-ix-events-layout="list")
 // ============================================================================
 //
 // Shares the data-ix-events-* attribute prefix with calendar.js — both read
@@ -43,10 +43,21 @@ import { whenEvents } from './event-data';
 //        [data-ix-events="card"]   the visible card
 //
 // Required structure per instance:
-//   [data-ix-events="wrap"] [data-ix-events-layout="list"]   component root (duplicate-recurring option lives here)
-//     [data-ix-events="prev"]          prev month button
-//     [data-ix-events="label"]         text element — JS sets the month/year
-//     [data-ix-events="next"]          next month button
+//   [data-ix-events="wrap"] [data-ix-events-layout="list"]   component root (options below live here)
+//     [data-ix-events="prev"]          prev month/week button
+//     [data-ix-events="label"]         text element — JS sets the active month/week
+//       data-ix-events-label-format="{format}"  optional override, same token
+//                                        vocabulary as data-ix-events-date-format below.
+//                                        Default: "MMMM YYYY" for range="month" (e.g.
+//                                        "August 2026"); a smart "Aug 3 - Aug 9, 2026"
+//                                        for range="week" (always shows both months and,
+//                                        when the week crosses a year boundary, both
+//                                        years, so it stays unambiguous). An override
+//                                        format string is applied to both the start and
+//                                        end of the week and joined with " - ".
+//     [data-ix-events="next"]          next month/week button
+//     [data-ix-events="today"]         optional — resets the active range to whichever
+//                                        month/week contains today's real date
 //     ...the card Collection List (A or B above), also carrying fs-list-element="list"...
 //       [data-ix-events="date"]          any element inside the card whose content
 //                                        should become the occurrence's start date/time
@@ -63,10 +74,16 @@ import { whenEvents } from './event-data';
 //                                        End Date flags, e.g. "June 14th", "June 14th at
 //                                        8pm", "June 14th, 8-9pm", "June 14-16th, 12pm-5pm".
 //
-// Options: data-ix-events-duplicate-recurring="true" (default) | "false"
-//   true  — clone the item once per occurrence date in the active month
-//   false — show the item once regardless of occurrence count, no clones
-//           (still only shown if at least one occurrence falls in the month)
+// Options (all read from the wrap element):
+//   data-ix-events-duplicate-recurring="true" (default) | "false"
+//     true  — clone the item once per occurrence date in the active range
+//     false — show the item once regardless of occurrence count, no clones
+//             (still only shown if at least one occurrence falls in the range)
+//   data-ix-events-range="month" (default) | "week"
+//     which size window prev/next/today step through and getOccurrences() is
+//     queried against. Invalid/unset values normalize to "month".
+//   data-ix-events-week-start="sunday" (default) | "monday"
+//     only consulted when range="week" — which day a week starts on.
 // ============================================================================
 
 const ANIMATION_ID = 'events';
@@ -75,6 +92,7 @@ const LAYOUT = 'list';
 const WRAP = '[data-ix-events="wrap"]';
 const PREV_BTN = '[data-ix-events="prev"]';
 const NEXT_BTN = '[data-ix-events="next"]';
+const TODAY_BTN = '[data-ix-events="today"]';
 const LABEL = '[data-ix-events="label"]';
 const ITEM = '[data-ix-events="item"]';
 const DATA_EL = '[data-ix-events="data"]';
@@ -92,9 +110,6 @@ const MONTH_FULL = [
 ];
 
 export const eventList = function () {
-  const ixEnabled = getIxConfig(ANIMATION_ID, true);
-  if (ixEnabled === false) return;
-
   const wraps = [...document.querySelectorAll(WRAP)].filter(
     (wrap) => wrap.getAttribute('data-ix-events-layout') === LAYOUT
   );
@@ -135,18 +150,17 @@ export const eventList = function () {
   });
 };
 
-// Guard clauses + item↔event pairing — unchanged regardless of what renders the result.
+// Item↔event pairing — unchanged regardless of what renders the result.
 function buildListConfig(wrap, eventsBySlug) {
-  if (checkRunProp(wrap, ANIMATION_ID) === false) {
-    console.log('[event-list] DEBUG buildListConfig: checkRunProp returned false for wrap', wrap);
-    return null;
-  }
-
   const duplicateRecurring = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-duplicate-recurring`));
+  let range = attr('month', wrap.getAttribute(`data-ix-${ANIMATION_ID}-range`));
+  if (range !== 'month' && range !== 'week') range = 'month';
+  const weekStartDay = attr('sunday', wrap.getAttribute(`data-ix-${ANIMATION_ID}-week-start`)) === 'monday' ? 1 : 0;
   const label = wrap.querySelector(LABEL);
   const prevBtn = wrap.querySelector(PREV_BTN);
   const nextBtn = wrap.querySelector(NEXT_BTN);
-  console.log('[event-list] DEBUG buildListConfig: duplicateRecurring =', duplicateRecurring, '| label found:', !!label, '| prevBtn found:', !!prevBtn, '| nextBtn found:', !!nextBtn);
+  const todayBtn = wrap.querySelector(TODAY_BTN);
+  console.log('[event-list] DEBUG buildListConfig: duplicateRecurring =', duplicateRecurring, '| range =', range, '| weekStartDay =', weekStartDay, '| label found:', !!label, '| prevBtn found:', !!prevBtn, '| nextBtn found:', !!nextBtn, '| todayBtn found:', !!todayBtn);
 
   const cardItems = [...wrap.querySelectorAll(ITEM)].filter((item) => item.querySelector(CARD_EL));
   console.log('[event-list] DEBUG buildListConfig: items with a card descendant found in wrap:', cardItems.length, cardItems);
@@ -188,19 +202,19 @@ function buildListConfig(wrap, eventsBySlug) {
   const list = entries[0].item.parentElement;
   console.log('[event-list] DEBUG buildListConfig: resolved `list` container element:', list);
 
-  return { duplicateRecurring, label, prevBtn, nextBtn, entries, list };
+  return { duplicateRecurring, range, weekStartDay, label, prevBtn, nextBtn, todayBtn, entries, list };
 }
 
 function initList(config, listInstance) {
-  const { duplicateRecurring, label, prevBtn, nextBtn, entries, list } = config;
+  const { duplicateRecurring, range, weekStartDay, label, prevBtn, nextBtn, todayBtn, entries, list } = config;
   const eventByElement = new Map(entries.map(({ item, event }) => [item, event]));
   console.log('[event-list] DEBUG initList: registering hook, listInstance =', listInstance);
 
-  const current = new Date();
-  current.setDate(1); // avoids month-length rollover bugs on setMonth()
+  let current = anchorFor(new Date(), range, weekStartDay);
 
   listInstance.addHook('filter', (items) => {
-    console.log('[event-list] DEBUG filter hook FIRED. items received from Finsweet:', items.length, items, '| active month:', current.getFullYear(), current.getMonth() + 1);
+    const { start: rangeStart, end: rangeEnd } = getRangeBounds(current, range);
+    console.log('[event-list] DEBUG filter hook FIRED. items received from Finsweet:', items.length, items, '| active range:', rangeStart, '-', rangeEnd);
 
     // Defensive cleanup: remove any clones from a previous pass in case
     // Finsweet doesn't drop DOM nodes that fall out of the returned array —
@@ -210,8 +224,6 @@ function initList(config, listInstance) {
     console.log('[event-list] DEBUG removing stale clones from previous pass:', removedClones.length);
     removedClones.forEach((el) => el.remove());
 
-    const monthStart = new Date(current.getFullYear(), current.getMonth(), 1);
-    const monthEnd = new Date(current.getFullYear(), current.getMonth() + 1, 0, 23, 59, 59);
     const result = [];
 
     items.forEach((listItem) => {
@@ -221,8 +233,8 @@ function initList(config, listInstance) {
         return;
       }
 
-      const occurrences = getOccurrences(event, monthStart, monthEnd).sort((a, b) => a.start - b.start);
-      console.log('[event-list] DEBUG event', event.name, '-> occurrences this month:', occurrences.length);
+      const occurrences = getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
+      console.log('[event-list] DEBUG event', event.name, '-> occurrences in range:', occurrences.length);
       if (occurrences.length === 0) return;
 
       const [first, ...rest] = occurrences;
@@ -249,9 +261,11 @@ function initList(config, listInstance) {
   });
 
   const refresh = () => {
-    console.log('[event-list] DEBUG refresh() called — month now:', current.getFullYear(), current.getMonth() + 1);
+    console.log('[event-list] DEBUG refresh() called — range now:', current);
     if (label) {
-      label.textContent = current.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+      const format = label.getAttribute('data-ix-events-label-format');
+      label.textContent =
+        range === 'week' ? formatWeekLabel(current, format) : formatOccurrenceDate(current, format || 'MMMM YYYY');
     }
     listInstance.triggerHook('filter');
   };
@@ -259,11 +273,15 @@ function initList(config, listInstance) {
   refresh();
 
   prevBtn?.addEventListener('click', () => {
-    current.setMonth(current.getMonth() - 1);
+    current = stepCurrent(current, range, -1);
     refresh();
   });
   nextBtn?.addEventListener('click', () => {
-    current.setMonth(current.getMonth() + 1);
+    current = stepCurrent(current, range, 1);
+    refresh();
+  });
+  todayBtn?.addEventListener('click', () => {
+    current = anchorFor(new Date(), range, weekStartDay);
     refresh();
   });
 }
@@ -280,6 +298,41 @@ function compareListEntries(a, b) {
 
 function startOfDay(date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+}
+
+function addDays(date, n) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + n);
+}
+
+function startOfWeek(date, weekStartDay) {
+  const diff = (date.getDay() - weekStartDay + 7) % 7;
+  return addDays(date, -diff);
+}
+
+// The anchor date for a range: the 1st of the month, or the first day of the
+// week (per weekStartDay). Used both to seed `current` and by the "today" button.
+function anchorFor(date, range, weekStartDay) {
+  return range === 'week' ? startOfWeek(date, weekStartDay) : new Date(date.getFullYear(), date.getMonth(), 1);
+}
+
+// `current` is always an anchor date (see anchorFor) — this expands it to the
+// actual [start, end] window passed to getOccurrences().
+function getRangeBounds(current, range) {
+  if (range === 'week') {
+    const weekEnd = addDays(current, 6);
+    return { start: current, end: new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate(), 23, 59, 59) };
+  }
+  return {
+    start: current,
+    end: new Date(current.getFullYear(), current.getMonth() + 1, 0, 23, 59, 59),
+  };
+}
+
+function stepCurrent(current, range, direction) {
+  if (range === 'week') return addDays(current, 7 * direction);
+  const next = new Date(current.getFullYear(), current.getMonth(), 1);
+  next.setMonth(next.getMonth() + direction);
+  return next;
 }
 
 // Formats the occurrence's date fields — for a recurring event this is the
@@ -332,6 +385,22 @@ function formatOccurrenceDate(date, format) {
   };
 
   return format.replace(DATE_FORMAT_TOKEN, (match) => tokens[match]());
+}
+
+// Label for range="week": `current` is the anchor (the week's first day, per
+// weekStartDay). No override → a smart default that always spells out the
+// month on both ends and adds the start year too when the week crosses a
+// year boundary, so it stays unambiguous ("Aug 3 - Aug 9, 2026",
+// "Dec 29, 2025 - Jan 4, 2026"). With an override, the same format string is
+// applied to both ends and joined with " - ".
+function formatWeekLabel(current, format) {
+  const end = addDays(current, 6);
+  if (format) {
+    return `${formatOccurrenceDate(current, format)} - ${formatOccurrenceDate(end, format)}`;
+  }
+  const crossesYear = current.getFullYear() !== end.getFullYear();
+  const startFormat = crossesYear ? 'MMM D, YYYY' : 'MMM D';
+  return `${formatOccurrenceDate(current, startFormat)} - ${formatOccurrenceDate(end, 'MMM D, YYYY')}`;
 }
 
 function isFullDateFormat(format) {

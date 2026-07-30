@@ -15,35 +15,8 @@
     if (!isNaN(attrVal) && defaultValType === "number") return +attrVal;
     return defaultVal;
   };
-  var checkRunProp = function(item, animationID) {
-    if (!item || !animationID) {
-      console.error(`GSAP check Run Error in ${animationID}`);
-      return;
-    }
-    const RUN = `data-ix-${animationID}-run`;
-    const run = attr(true, item.getAttribute(RUN));
-    if (run === false) return false;
-    return true;
-  };
-  var getIxConfig = function(interactionID, defaults) {
-    if (!interactionID) {
-      console.error(`No interactionID provided to getIxConfig`);
-      return;
-    }
-    const pageRunEl = document.querySelector(`[data-ix-${interactionID}-page-run]`);
-    const pageRun = attr(true, pageRunEl?.getAttribute(`data-ix-${interactionID}-page-run`));
-    if (pageRun === false) {
-      document.querySelector("body").setAttribute(`data-ix-${interactionID}-page-run`, "false");
-      return false;
-    }
-    if (typeof window.ixConfig === "undefined") return defaults;
-    const siteConfig = window.ixConfig[interactionID];
-    if (siteConfig === false) return false;
-    if (!siteConfig || typeof siteConfig !== "object") return defaults;
-    return Object.assign({}, defaults, siteConfig);
-  };
 
-  // src/interactions/recurrence.js
+  // src/recurrence.js
   var WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
   function getOccurrences(event, rangeStart, rangeEnd) {
     const {
@@ -220,7 +193,7 @@
     return `${y}-${m}-${d}`;
   }
 
-  // src/interactions/event-data.js
+  // src/event-data.js
   var DATA_WRAP = '[data-ix-events="data-wrap"]';
   var ITEM = '[data-ix-events="item"]';
   var DATA_EL = '[data-ix-events="data"]';
@@ -262,12 +235,13 @@
     tryLoad();
   }
 
-  // src/interactions/event-list.js
+  // src/event-list.js
   var ANIMATION_ID = "events";
   var LAYOUT = "list";
   var WRAP = '[data-ix-events="wrap"]';
   var PREV_BTN = '[data-ix-events="prev"]';
   var NEXT_BTN = '[data-ix-events="next"]';
+  var TODAY_BTN = '[data-ix-events="today"]';
   var LABEL = '[data-ix-events="label"]';
   var ITEM2 = '[data-ix-events="item"]';
   var DATA_EL2 = '[data-ix-events="data"]';
@@ -293,8 +267,6 @@
     "December"
   ];
   var eventList = function() {
-    const ixEnabled = getIxConfig(ANIMATION_ID, true);
-    if (ixEnabled === false) return;
     const wraps = [...document.querySelectorAll(WRAP)].filter(
       (wrap) => wrap.getAttribute("data-ix-events-layout") === LAYOUT
     );
@@ -328,15 +300,15 @@
     });
   };
   function buildListConfig(wrap, eventsBySlug) {
-    if (checkRunProp(wrap, ANIMATION_ID) === false) {
-      console.log("[event-list] DEBUG buildListConfig: checkRunProp returned false for wrap", wrap);
-      return null;
-    }
     const duplicateRecurring = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-duplicate-recurring`));
+    let range = attr("month", wrap.getAttribute(`data-ix-${ANIMATION_ID}-range`));
+    if (range !== "month" && range !== "week") range = "month";
+    const weekStartDay = attr("sunday", wrap.getAttribute(`data-ix-${ANIMATION_ID}-week-start`)) === "monday" ? 1 : 0;
     const label = wrap.querySelector(LABEL);
     const prevBtn = wrap.querySelector(PREV_BTN);
     const nextBtn = wrap.querySelector(NEXT_BTN);
-    console.log("[event-list] DEBUG buildListConfig: duplicateRecurring =", duplicateRecurring, "| label found:", !!label, "| prevBtn found:", !!prevBtn, "| nextBtn found:", !!nextBtn);
+    const todayBtn = wrap.querySelector(TODAY_BTN);
+    console.log("[event-list] DEBUG buildListConfig: duplicateRecurring =", duplicateRecurring, "| range =", range, "| weekStartDay =", weekStartDay, "| label found:", !!label, "| prevBtn found:", !!prevBtn, "| nextBtn found:", !!nextBtn, "| todayBtn found:", !!todayBtn);
     const cardItems = [...wrap.querySelectorAll(ITEM2)].filter((item) => item.querySelector(CARD_EL));
     console.log("[event-list] DEBUG buildListConfig: items with a card descendant found in wrap:", cardItems.length, cardItems);
     if (cardItems.length === 0) return null;
@@ -367,21 +339,19 @@
     if (entries.length === 0) return null;
     const list = entries[0].item.parentElement;
     console.log("[event-list] DEBUG buildListConfig: resolved `list` container element:", list);
-    return { duplicateRecurring, label, prevBtn, nextBtn, entries, list };
+    return { duplicateRecurring, range, weekStartDay, label, prevBtn, nextBtn, todayBtn, entries, list };
   }
   function initList(config, listInstance) {
-    const { duplicateRecurring, label, prevBtn, nextBtn, entries, list } = config;
+    const { duplicateRecurring, range, weekStartDay, label, prevBtn, nextBtn, todayBtn, entries, list } = config;
     const eventByElement = new Map(entries.map(({ item, event }) => [item, event]));
     console.log("[event-list] DEBUG initList: registering hook, listInstance =", listInstance);
-    const current = /* @__PURE__ */ new Date();
-    current.setDate(1);
+    let current = anchorFor(/* @__PURE__ */ new Date(), range, weekStartDay);
     listInstance.addHook("filter", (items) => {
-      console.log("[event-list] DEBUG filter hook FIRED. items received from Finsweet:", items.length, items, "| active month:", current.getFullYear(), current.getMonth() + 1);
+      const { start: rangeStart, end: rangeEnd } = getRangeBounds(current, range);
+      console.log("[event-list] DEBUG filter hook FIRED. items received from Finsweet:", items.length, items, "| active range:", rangeStart, "-", rangeEnd);
       const removedClones = list.querySelectorAll(`[${CLONE_ATTR}]`);
       console.log("[event-list] DEBUG removing stale clones from previous pass:", removedClones.length);
       removedClones.forEach((el) => el.remove());
-      const monthStart = new Date(current.getFullYear(), current.getMonth(), 1);
-      const monthEnd = new Date(current.getFullYear(), current.getMonth() + 1, 0, 23, 59, 59);
       const result = [];
       items.forEach((listItem) => {
         const event = eventByElement.get(listItem.element);
@@ -389,8 +359,8 @@
           console.log("[event-list] DEBUG no matching event for this listItem.element (stale/unrecognized) \u2014 dropping:", listItem.element);
           return;
         }
-        const occurrences = getOccurrences(event, monthStart, monthEnd).sort((a, b) => a.start - b.start);
-        console.log("[event-list] DEBUG event", event.name, "-> occurrences this month:", occurrences.length);
+        const occurrences = getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
+        console.log("[event-list] DEBUG event", event.name, "-> occurrences in range:", occurrences.length);
         if (occurrences.length === 0) return;
         const [first, ...rest] = occurrences;
         setDateFields(listItem.element, first, event);
@@ -413,19 +383,24 @@
       return result.map((r) => r.listItem);
     });
     const refresh = () => {
-      console.log("[event-list] DEBUG refresh() called \u2014 month now:", current.getFullYear(), current.getMonth() + 1);
+      console.log("[event-list] DEBUG refresh() called \u2014 range now:", current);
       if (label) {
-        label.textContent = current.toLocaleDateString("en-US", { month: "long", year: "numeric" });
+        const format = label.getAttribute("data-ix-events-label-format");
+        label.textContent = range === "week" ? formatWeekLabel(current, format) : formatOccurrenceDate(current, format || "MMMM YYYY");
       }
       listInstance.triggerHook("filter");
     };
     refresh();
     prevBtn?.addEventListener("click", () => {
-      current.setMonth(current.getMonth() - 1);
+      current = stepCurrent(current, range, -1);
       refresh();
     });
     nextBtn?.addEventListener("click", () => {
-      current.setMonth(current.getMonth() + 1);
+      current = stepCurrent(current, range, 1);
+      refresh();
+    });
+    todayBtn?.addEventListener("click", () => {
+      current = anchorFor(/* @__PURE__ */ new Date(), range, weekStartDay);
       refresh();
     });
   }
@@ -437,6 +412,32 @@
   }
   function startOfDay2(date) {
     return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  }
+  function addDays2(date, n) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate() + n);
+  }
+  function startOfWeek2(date, weekStartDay) {
+    const diff = (date.getDay() - weekStartDay + 7) % 7;
+    return addDays2(date, -diff);
+  }
+  function anchorFor(date, range, weekStartDay) {
+    return range === "week" ? startOfWeek2(date, weekStartDay) : new Date(date.getFullYear(), date.getMonth(), 1);
+  }
+  function getRangeBounds(current, range) {
+    if (range === "week") {
+      const weekEnd = addDays2(current, 6);
+      return { start: current, end: new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate(), 23, 59, 59) };
+    }
+    return {
+      start: current,
+      end: new Date(current.getFullYear(), current.getMonth() + 1, 0, 23, 59, 59)
+    };
+  }
+  function stepCurrent(current, range, direction) {
+    if (range === "week") return addDays2(current, 7 * direction);
+    const next = new Date(current.getFullYear(), current.getMonth(), 1);
+    next.setMonth(next.getMonth() + direction);
+    return next;
   }
   function setDateFields(root, occurrence, event) {
     root.querySelectorAll(DATE_EL).forEach((el) => {
@@ -473,6 +474,15 @@
       a: () => hours >= 12 ? "pm" : "am"
     };
     return format.replace(DATE_FORMAT_TOKEN, (match) => tokens[match]());
+  }
+  function formatWeekLabel(current, format) {
+    const end = addDays2(current, 6);
+    if (format) {
+      return `${formatOccurrenceDate(current, format)} - ${formatOccurrenceDate(end, format)}`;
+    }
+    const crossesYear = current.getFullYear() !== end.getFullYear();
+    const startFormat = crossesYear ? "MMM D, YYYY" : "MMM D";
+    return `${formatOccurrenceDate(current, startFormat)} - ${formatOccurrenceDate(end, "MMM D, YYYY")}`;
   }
   function isFullDateFormat(format) {
     return format.trim().toUpperCase() === "FULLDATE";
@@ -520,7 +530,7 @@
     });
   }
 
-  // src/interactions/calendar.js
+  // src/calendar.js
   var ANIMATION_ID2 = "events";
   var LAYOUT2 = "calendar";
   var WRAP2 = '[data-ix-events="wrap"]';
@@ -546,17 +556,12 @@
   ];
   var stylesInjected = false;
   var calendar = function() {
-    const ixEnabled = getIxConfig(ANIMATION_ID2, true);
-    if (ixEnabled === false) return;
     const wraps = [...document.querySelectorAll(WRAP2)].filter(
       (wrap) => wrap.getAttribute("data-ix-events-layout") === LAYOUT2
     );
     if (wraps.length === 0) return;
     injectStyles();
-    wraps.forEach((wrap) => {
-      if (checkRunProp(wrap, ANIMATION_ID2) === false) return;
-      initCalendar(wrap);
-    });
+    wraps.forEach((wrap) => initCalendar(wrap));
   };
   function initCalendar(wrap) {
     const monthRange = attr(6, wrap.getAttribute(`data-ix-${ANIMATION_ID2}-months`));
@@ -682,7 +687,7 @@
     }
     while (cells.length < 42) {
       const last = cells[cells.length - 1].date;
-      cells.push({ date: addDays2(last, 1), inMonth: false });
+      cells.push({ date: addDays3(last, 1), inMonth: false });
     }
     cells.forEach((cell, i) => {
       const dayEl = document.createElement("div");
@@ -817,7 +822,7 @@
   function daysInMonth2(year, monthIndex) {
     return new Date(year, monthIndex + 1, 0).getDate();
   }
-  function addDays2(date, n) {
+  function addDays3(date, n) {
     return new Date(date.getFullYear(), date.getMonth(), date.getDate() + n);
   }
   function startOfDay3(date) {

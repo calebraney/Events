@@ -12,61 +12,42 @@ Core idea: recurrence (Daily/Weekly/Monthly/Yearly + interval + skip dates + opt
 
 ```
 src/
-  index.js              — entry point; imports and calls all interactions
-  utilities.js          — shared utility functions
-  interactions/         — one file per interaction, named export function
+  index.js             — entry point; imports and calls eventList() and calendar()
+  utilities.js         — shared utility functions (attr)
+  recurrence.js        — shared recurrence engine (getOccurrences), no DOM
+  recurrence.test.js   — unit tests for recurrence.js (node --test)
+  event-data.js        — shared data lookup (whenEvents)
+  event-list.js        — List View (data-ix-events-layout="list")
+  calendar.js          — Calendar (data-ix-events-layout="calendar")
 ```
 
-### index.js call locations
+### index.js
 
-| Interaction type | Where to call |
-|---|---|
-| Scroll/motion animations | Inside `if (!reduceMotion) { }` block in matchMedia callback |
-| UI interactions (accordion, modal, tabs, etc.) | After the matchMedia block |
-| Lenis-dependent interactions | Pass `lenis` as argument |
+`index.js` is flat — no matchMedia/reduceMotion block, no Lenis instance. It just calls `eventList()` and `calendar()` on `DOMContentLoaded`; each function no-ops if its wrap selector isn't found on the page.
 
 ---
 
 ## Code Conventions
 
 ### File & Function Naming
-- File: `kebab-case.js` in `src/interactions/`
+- File: `kebab-case.js` in `src/`
 - Export function: `camelCase` matching filename
 - `ANIMATION_ID`: camelCase string, no hyphens (e.g. `'scrollIn'`, `'hoverActive'`)
 
 ### Attribute Convention
-- Element roles: `data-ix-{name}="{role}"` (e.g. `data-ix-magnetic="target"`)
-- Options: `data-ix-{name}-{property}` (e.g. `data-ix-magnetic-strength`)
-- Run gates: `data-ix-{name}-site-run`, `data-ix-{name}-page-run`, `data-ix-{name}-run`
-- Breakpoint: `data-ix-{name}-breakpoint`
+- Element roles: `data-ix-{name}="{role}"` (e.g. `data-ix-events="wrap"`)
+- Options: `data-ix-{name}-{property}` (e.g. `data-ix-events-duplicate-recurring`)
+
+No run gates (`-site-run`/`-page-run`/`-run`) or breakpoint disabling — those are animation-library concepts (opting out of a *decorative* effect on a page/breakpoint). `event-list.js` and `calendar.js` are functional: if their elements/attributes are on the page, they're meant to run there, unconditionally.
 
 ### Guard Clause Order (always this order)
-1. `getIxConfig(ANIMATION_ID, true)` → exit whole function if `=== false`
-2. `querySelectorAll(WRAP)` length check → exit whole function
-3. `checkRunProp(wrap, ANIMATION_ID)` inside forEach → skip instance
-4. child element length check → skip instance
+1. `querySelectorAll(WRAP)` length check → exit whole function
+2. child element length check inside `forEach` → skip instance
 
 ### Options Pattern
-- **≤ 2 options**: individual `attr()` calls
-  ```js
-  let speed = attr(1, wrap.getAttribute('data-ix-foo-speed'));
-  ```
-- **> 2 options**: use `getAttrConfig` — cleaner and self-documenting
-  ```js
-  const config = getAttrConfig(wrap, ANIMATION_ID, {
-    speed: 1,
-    ease: 'power1.out',
-    duration: 0.6,
-  });
-  // Access as config.speed, config.ease, config.duration
-  // Hyphenated keys use bracket notation: config['active-class']
-  ```
-  Remove individual `const OPTION_* = 'data-ix-...'` constants when replacing with `getAttrConfig` — the utility constructs attribute names as `data-ix-{prefix}-{key}` automatically.
-
-### Breakpoints
+Every option is a single `attr()` call — no batch reader:
 ```js
-const breakpoint = attr('none', wrap.getAttribute(`data-ix-${ANIMATION_ID}-breakpoint`));
-checkContainer(items[0], breakpoint, animationCallback);
+let speed = attr(1, wrap.getAttribute('data-ix-foo-speed'));
 ```
 
 ---
@@ -76,19 +57,8 @@ checkContainer(items[0], breakpoint, animationCallback);
 | Utility | Purpose |
 |---|---|
 | `attr(default, attrVal)` | Type-safe attribute reader with coercion |
-| `attrIfSet(item, attrName, default)` | Returns `undefined` if attr not set (use for optional GSAP props) |
-| `getAttrConfig(element, prefix, defaults)` | Batch attr reader — use for > 2 options |
-| `buildFromToVars(item, prefix)` | Builds GSAP fromTo vars from data attrs |
-| `getIxConfig(animationID, defaults)` | Reads `window.ixConfig` and handles page-run gate |
-| `checkRunProp(item, animationID)` | Checks per-instance run gate |
-| `checkContainer(child, breakpoint, callback)` | Container-query-based breakpoint support |
-| `getClipDirection(value)` | Converts direction keywords to clip-path polygons |
-| `runSplit(text, types)` | GSAP SplitText wrapper with autoSplit |
-| `getNonContentsChildren(item)` | Gets children ignoring `display: contents` wrappers |
-| `flattenDisplayContents(slot)` | Removes `.u-display-contents` wrapper divs (Webflow) |
-| `removeCMSList(slot)` | Unwraps Webflow CMS collection list structure |
-| `ClassWatcher` | MutationObserver for class additions/removals |
-| `stopScroll(lenis)` / `startScroll(lenis)` | Pause/resume scroll (Lenis-aware) |
+
+This is a trimmed subset of the Interactions starter's full utility set — only what `event-list.js` and `calendar.js` actually use. Don't port other utilities over from the Interactions repo speculatively; add something here only once a real need for it exists in this repo.
 
 ---
 
@@ -98,13 +68,12 @@ checkContainer(items[0], breakpoint, animationCallback);
 - **No unnecessary extras** — don't add comments, docstrings, error handling, or features beyond what was asked
 - **No backwards-compat hacks** — remove things cleanly, don't leave stubs
 - **Prefer editing existing files** over creating new ones
-- **Use the create-interaction skill** (`/create-interaction`) when adding a new interaction
 
 ---
 
 ## Interaction Inventory
 
-All interactions live in `src/interactions/`:
+All interactions live flat in `src/`:
 
 - `recurrence.js` — shared recurrence engine (`getOccurrences`), no DOM, used by both interactions below
 - `event-data.js` — shared data lookup (`whenEvents`); finds the one `[data-ix-events="data-wrap"]` Collection List on the page, used by both interactions below so they can't read two different sources
