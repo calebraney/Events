@@ -68,6 +68,7 @@ This is a trimmed subset of the Interactions starter's full utility set — only
 - **No unnecessary extras** — don't add comments, docstrings, error handling, or features beyond what was asked
 - **No backwards-compat hacks** — remove things cleanly, don't leave stubs
 - **Prefer editing existing files** over creating new ones
+- **Keep `README.md` current** — it's the public-facing reference (GitHub repo page), covering CMS field setup, the hidden JSON contract, and the full `data-ix-events-*` element/option/format-token tables for both `event-list.js` and `calendar.js`. Any time a feature is added, an attribute is added/renamed/removed, or existing behavior changes (new option, new default, new format token, changed CMS field), update the relevant table/section in `README.md` in the same change — don't let it drift out of sync with the code.
 
 ---
 
