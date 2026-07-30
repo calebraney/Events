@@ -1,13 +1,13 @@
 # Events
 
-A reusable Webflow events system built by Caleb Raney: recurring-event CMS logic, a List View (month or week), and a Calendar — all driven by `data-ix-*` attributes and one shared recurrence engine, no framework required.
+A reusable Webflow events system built by Caleb Raney: recurring-event CMS logic, a List View (month or week), a Feed View (linear, upcoming-only), and a Calendar — all driven by `data-ix-*` attributes and one shared recurrence engine, no framework required.
 
-- **`recurrence.js`** — computes occurrence dates for an event (including recurring patterns) for any date range. No DOM. Used by both components below so recurrence is only ever calculated one way.
-- **`event-data.js`** — finds the one page-wide event data source and parses it, shared by both components so they can never read two different data sets.
-- **`event-list.js`** — a List View that expands/filters a native Webflow Collection List in place (`data-ix-events-layout="list"`).
+- **`recurrence.js`** — computes occurrence dates for an event (including recurring patterns) for any date range. No DOM. Used by every view below so recurrence is only ever calculated one way.
+- **`event-data.js`** — finds the one page-wide event data source and parses it, shared by every view so they can never read two different data sets.
+- **`event-list.js`** — List View (`data-ix-events-layout="list"`) and Feed View (`data-ix-events-layout="feed"`). Both expand/filter a native Webflow Collection List in place; List View shows a fixed month/week window with prev/next stepping, Feed View is a linear, always-upcoming list that grows via a "Load More" button.
 - **`calendar.js`** — a month-grid Calendar rendered entirely in JS (`data-ix-events-layout="calendar"`).
 
-A List View and a Calendar can both live on the same page and will read the same event data automatically.
+Any combination of these views can live on the same page and will read the same event data automatically.
 
 ---
 
@@ -25,13 +25,13 @@ Host the built `dist/index.js` (e.g. via jsDelivr pointing at this repo, or self
 <script src="[hosted dist/index.js URL]"></script>
 ```
 
-The List View also requires Finsweet Attributes' List module, once per site — see [List View → Requirements](#requirements) below.
+List View also requires Finsweet Attributes' List module, once per site — see [List View → Requirements](#requirements) below. Feed View only needs it if you're also using `fs-list-load="all"` (see [More than ~100 events](#more-than-100-events) under List View).
 
 ---
 
 ## 1. CMS Collection Setup
 
-Both components read the same `events` CMS collection through one hidden JSON payload per item — no visible-text scraping, so display formatting in the Designer never has to match what the script parses.
+Every view reads the same `events` CMS collection through one hidden JSON payload per item — no visible-text scraping, so display formatting in the Designer never has to match what the script parses.
 
 ### Fields
 
@@ -80,7 +80,7 @@ Dynamo renders `Start Date/Time`/`End Date/Time` as `"YYYY-MM-DD h:mm a"` and `R
 
 ### Shared data source markup
 
-Place this **once**, anywhere on the page — it's the single source both a List View and a Calendar on the same page will read:
+Place this **once**, anywhere on the page — it's the single source every view on the same page will read:
 
 ```
 [data-ix-events="data-wrap"]     the Collection List
@@ -111,14 +111,18 @@ DOM rendering is delegated to [Finsweet Attributes' List module](https://finswee
 
 And add `fs-list-element="list"` to the Collection List wrapper that holds the cards (same element in Combined mode, or the separate card list in Separate mode — see below).
 
+#### More than ~100 events
+
+Webflow only renders a Collection List's first ~100 items natively. To go beyond that, add `fs-list-load="all"` (alongside the already-required `fs-list-element="list"`) to whichever list(s) actually hold the overflow — the card list, the shared `data-wrap` (§1), or both, depending on which mode you're using and where the item count is coming from. Both `event-list.js` and `event-data.js` (and therefore `calendar.js`, which reads through it) wait for Finsweet to finish loading every paginated page before scanning for items, so nothing past the first page gets silently missed. Sites under 100 events can leave this off entirely — nothing changes for them.
+
 ### Element attributes
 
 | Attribute                                                | Applied to                                          | Required                     | Purpose                                                                                       |
 | -------------------------------------------------------- | --------------------------------------------------- | ---------------------------- | --------------------------------------------------------------------------------------------- |
 | `data-ix-events="wrap"` + `data-ix-events-layout="list"` | Component root                                      | Yes                          | Marks this element as a List View instance. Every option below is read from this element.     |
-| `data-ix-events="prev"`                                  | A button, anywhere inside wrap                      | No                           | Steps back one month/week.                                                                    |
+| `data-ix-events="prev"`                                  | A button, anywhere inside wrap                      | No                           | Steps back one month/week. Gets class `is-disabled` (and does nothing when clicked) when `hide-past-events="true"` and stepping back would land entirely before today. |
 | `data-ix-events="next"`                                  | A button, anywhere inside wrap                      | No                           | Steps forward one month/week.                                                                 |
-| `data-ix-events="today"`                                 | A button, anywhere inside wrap                      | No                           | Jumps back to the month/week containing today's real date.                                    |
+| `data-ix-events="today"`                                 | A button, anywhere inside wrap                      | No                           | Jumps back to the month/week containing today's real date. Gets class `is-disabled` (and does nothing when clicked) when the active range already contains today. |
 | `data-ix-events="label"`                                 | A text element, anywhere inside wrap                | No                           | JS sets its text to the active month/week (see format options below).                         |
 | `data-ix-events="item"`                                  | Collection List item                                | Yes                          | One per repeating item.                                                                       |
 | `data-ix-events="card"`                                  | Element inside each item                            | Yes                          | The visible card content — this is what gets cloned for additional occurrences.               |
@@ -138,6 +142,9 @@ And add `fs-list-element="list"` to the Collection List wrapper that holds the c
 | `data-ix-events-duplicate-recurring` | `true` \| `false`    | `true`   | `true` clones the card once per occurrence date in the active range. `false` shows the original card once regardless of occurrence count (still only shown if at least one occurrence falls in the range). |
 | `data-ix-events-range`               | `month` \| `week`    | `month`  | The size of window prev/next/today step through, and what `getOccurrences()` is queried against. Invalid/unset values normalize to `month`.                                                                |
 | `data-ix-events-week-start`          | `sunday` \| `monday` | `sunday` | Only consulted when `range="week"` — which day a week starts on.                                                                                                                                           |
+| `data-ix-events-hide-past-events`    | `true` \| `false`    | `false`  | `true` excludes occurrences that have already ended from what's shown. For a recurring event this is per-occurrence — only its past occurrences are hidden, future ones in the same active range still show. With `duplicate-recurring="false"`, the single card still shows as long as at least one occurrence in the active range hasn't ended yet. Also disables the `prev` and `today` buttons (see Element attributes above) once there's nowhere non-past left to navigate to. |
+
+All `true`/`false` values above are case-insensitive (`"True"`, `"FALSE"`, etc. all work).
 
 ### Format attributes
 
@@ -195,7 +202,48 @@ A shared meridiem is dropped from the start time when it wouldn't be ambiguous (
 
 ---
 
-## 3. Calendar (`calendar.js`)
+## 3. Feed View (`event-list.js`)
+
+`data-ix-events-layout="feed"` — a linear, always-upcoming list starting from today: every card is an occurrence-clone (originals stay hidden as templates, since occurrences from different events interleave chronologically across the whole feed), revealed a batch at a time via a "Load More" button rather than a fixed month/week window.
+
+There's no steppable range and no past-events toggle here — the range always starts at today by definition, so `data-ix-events-range`, `-week-start`, `-hide-past-events`, and the `prev`/`next`/`today`/`label` elements are List-View-only and don't apply to feed instances.
+
+### Requirements
+
+None beyond the shared data source (§1) and Combined/Separate card setup (same as List View — see above). Finsweet isn't required unless a feed's Collection List also uses `fs-list-load="all"` for [more than ~100 events](#more-than-100-events) — Feed View doesn't use Finsweet's filter/render pipeline at all (it only ever appends, never hides a previously-shown card), so it only needs Finsweet's `loadingPaginatedItems` signal, when applicable.
+
+### Element attributes
+
+| Attribute                              | Applied to                       | Required            | Purpose                                                                                                                                                                                          |
+| --------------------------------------- | --------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data-ix-events="wrap"` + `data-ix-events-layout="feed"` | Component root       | Yes                  | Marks this element as a Feed View instance. Every option below is read from this element.                                                                                                       |
+| `data-ix-events="load-more"`            | A button, anywhere inside wrap    | No                   | Reveals the next batch of upcoming occurrences.                                                                                                                                                  |
+| `data-ix-events="item"` / `"card"` / `"data"`, `data-ix-events-slug` | Collection List item + children | Yes (same as List View) | Same Combined/Separate mode contract as List View — see above.                                                                                                                    |
+| `data-ix-events="date"`                 | Any text element inside the card  | No (needed to display dates) | Same as List View, including `FULLDATE` — see [Format attributes](#format-attributes) above.                                                                                          |
+| `data-ix-events="feed-divider"`         | A standalone element, sibling of the card Collection List (not inside it) | No | Divider template. Give it Lumos's `u-hide` class in the Designer so it's invisible in its authored position — each inserted copy has that class removed (an inline style override can't reliably win against a typically-`!important` hide class). One is inserted automatically before the very first card in the feed, and again at every month boundary after that. |
+| `data-ix-events="feed-divider-text"`    | Child of the divider above         | Yes, if using dividers | JS updates this element's text per divider instance.                                                                                                                                    |
+
+### Option attributes (all on the `wrap` element)
+
+| Attribute                          | Values            | Default | Purpose                                                                                                                                                                                                          |
+| ----------------------------------- | ----------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data-ix-events-duplicate-recurring` | `true` \| `false` | `true`  | Same meaning as List View — `false` caps each event to its single next upcoming occurrence.                                                                                                                     |
+| `data-ix-events-feed-count`          | number             | `12`    | How many occurrence-cards to reveal on init and per `Load More` click.                                                                                                                                          |
+| `data-ix-events-feed-period`         | `month` \| `week`  | `month` | The granularity `Load More`'s internal search expands by when looking for enough occurrences to fill a batch. Doesn't change what's shown — only how the search is chunked internally.                        |
+| `data-ix-events-feed-divider`        | `true` \| `false`  | `true`  | Enables inserting month-divider elements, including the very first one (marking the current month, before the first card). Requires a `[data-ix-events="feed-divider"]` element in the wrap.                  |
+| `data-ix-events-feed-divider-today`  | `true` \| `false`  | `false` | Only meaningful when `feed-divider` is `true`. Overrides the text of that very first divider to the literal word "Today" instead of the current month's formatted label. No effect if `feed-divider` is `false`. |
+
+### Divider text format
+
+`data-ix-events-date-format` on the `[data-ix-events="feed-divider-text"]` element — same token vocabulary as the card's date-format (see [Format tokens](#format-tokens) above), but no `FULLDATE` support (a divider isn't tied to a specific occurrence's show-flags). Default `"MMMM, YYYY"` → `"July, 2026"`.
+
+### Load More behavior
+
+Each click reveals the next `feed-count` occurrences, searched chronologically forward from today across every event (recurring events contribute one card per upcoming occurrence, same as List View with `duplicate-recurring="true"`). The button hides/disables itself once there are no more upcoming occurrences to reveal — including on a feed with genuinely nothing left, or after searching up to 3 years forward (month period) / ~8 months forward (week period) without finding a full batch, whichever search granularity is configured.
+
+---
+
+## 4. Calendar (`calendar.js`)
 
 `data-ix-events-layout="calendar"` — a month-grid calendar rendered entirely in JS inside the wrap element (no Collection List needed on the page for this one; it renders its own DOM from the shared data source in §1).
 
@@ -210,5 +258,5 @@ If no `[data-ix-events="data-wrap"]` is found on the page, the calendar falls ba
 
 ## Notes
 
-- No run gates (`-site-run` / `-page-run` / `-run`) and no breakpoint disabling — both components are functional, not decorative, so they always run if their elements/attributes are present.
-- A List View and a Calendar can coexist on the same page (e.g. a layout toggle) and will read the same `[data-ix-events="data-wrap"]` source — no risk of the two drifting apart.
+- No run gates (`-site-run` / `-page-run` / `-run`) and no breakpoint disabling — every view is functional, not decorative, so it always runs if its elements/attributes are present.
+- Any combination of List View, Feed View, and Calendar can coexist on the same page (e.g. a layout toggle) and will read the same `[data-ix-events="data-wrap"]` source — no risk of them drifting apart.

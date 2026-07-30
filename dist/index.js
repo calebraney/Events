@@ -219,7 +219,21 @@
         callback([]);
         return;
       }
-      const events = items.map((item) => {
+      if (dataWrap.getAttribute("fs-list-element") === "list") {
+        window.FinsweetAttributes ||= [];
+        window.FinsweetAttributes.push([
+          "list",
+          (listInstances) => {
+            const listInstance = listInstances.find((l) => l.listElement === dataWrap);
+            Promise.resolve(listInstance?.loadingPaginatedItems).then(() => finish(dataWrap));
+          }
+        ]);
+        return;
+      }
+      finish(dataWrap);
+    };
+    const finish = (dataWrap) => {
+      const events = [...dataWrap.querySelectorAll(ITEM)].map((item) => {
         const dataEl = item.querySelector(DATA_EL);
         if (!dataEl) return null;
         try {
@@ -237,7 +251,8 @@
 
   // src/event-list.js
   var ANIMATION_ID = "events";
-  var LAYOUT = "list";
+  var LIST_LAYOUT = "list";
+  var FEED_LAYOUT = "feed";
   var WRAP = '[data-ix-events="wrap"]';
   var PREV_BTN = '[data-ix-events="prev"]';
   var NEXT_BTN = '[data-ix-events="next"]';
@@ -249,6 +264,12 @@
   var DATE_EL = '[data-ix-events="date"]';
   var SLUG_ATTR = "data-ix-events-slug";
   var CLONE_ATTR = "data-ix-events-clone";
+  var DISABLED_CLASS = "is-disabled";
+  var FS_LIST_SELECTOR = '[fs-list-element="list"]';
+  var LOAD_MORE_BTN = '[data-ix-events="load-more"]';
+  var FEED_DIVIDER_EL = '[data-ix-events="feed-divider"]';
+  var FEED_DIVIDER_TEXT_EL = '[data-ix-events="feed-divider-text"]';
+  var FEED_SEARCH_CAP = 36;
   var DOW_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   var DOW_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   var MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -268,51 +289,227 @@
   ];
   var eventList = function() {
     const wraps = [...document.querySelectorAll(WRAP)].filter(
-      (wrap) => wrap.getAttribute("data-ix-events-layout") === LAYOUT
+      (wrap) => wrap.getAttribute("data-ix-events-layout") === LIST_LAYOUT
     );
     console.log('[event-list] DEBUG wraps with layout="list" found:', wraps.length, wraps);
     if (wraps.length === 0) return;
     whenEvents((events) => {
       console.log("[event-list] DEBUG whenEvents callback fired, events received:", events.length, events);
       const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
-      const configs = wraps.map((wrap) => buildListConfig(wrap, eventsBySlug)).filter(Boolean);
-      console.log("[event-list] DEBUG configs built:", configs.length, configs);
-      if (configs.length === 0) return;
-      window.FinsweetAttributes ||= [];
-      window.FinsweetAttributes.push([
-        "list",
-        (listInstances) => {
-          console.log("[event-list] DEBUG Finsweet list callback fired, listInstances found:", listInstances.length, listInstances);
-          configs.forEach((config) => {
-            const listInstance = listInstances.find((l) => l.listElement === config.list);
-            console.log("[event-list] DEBUG matching Finsweet instance for config.list:", config.list, "-> found:", !!listInstance);
-            if (!listInstance) {
-              console.warn(
-                'event-list: no Finsweet List instance found for this Collection List \u2014 add fs-list-element="list" to it.',
-                config.list
-              );
-              return;
-            }
-            initList(config, listInstance);
-          });
-        }
-      ]);
+      wraps.forEach((wrap) => {
+        whenListReady(wrap, true, (listInstance) => {
+          const config = buildListConfig(wrap, listInstance.listElement, eventsBySlug);
+          console.log("[event-list] DEBUG config built for wrap:", wrap, "-> ", config);
+          if (!config) return;
+          initList(config, listInstance);
+        });
+      });
     });
   };
-  function buildListConfig(wrap, eventsBySlug) {
+  function buildListConfig(wrap, list, eventsBySlug) {
     const duplicateRecurring = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-duplicate-recurring`));
-    let range = attr("month", wrap.getAttribute(`data-ix-${ANIMATION_ID}-range`));
+    const hidePastEvents = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID}-hide-past-events`));
+    let range = attr("month", wrap.getAttribute(`data-ix-${ANIMATION_ID}-range`)?.toLowerCase());
     if (range !== "month" && range !== "week") range = "month";
-    const weekStartDay = attr("sunday", wrap.getAttribute(`data-ix-${ANIMATION_ID}-week-start`)) === "monday" ? 1 : 0;
+    const weekStartDay = attr("sunday", wrap.getAttribute(`data-ix-${ANIMATION_ID}-week-start`)?.toLowerCase()) === "monday" ? 1 : 0;
     const label = wrap.querySelector(LABEL);
     const prevBtn = wrap.querySelector(PREV_BTN);
     const nextBtn = wrap.querySelector(NEXT_BTN);
     const todayBtn = wrap.querySelector(TODAY_BTN);
-    console.log("[event-list] DEBUG buildListConfig: duplicateRecurring =", duplicateRecurring, "| range =", range, "| weekStartDay =", weekStartDay, "| label found:", !!label, "| prevBtn found:", !!prevBtn, "| nextBtn found:", !!nextBtn, "| todayBtn found:", !!todayBtn);
+    console.log("[event-list] DEBUG buildListConfig: duplicateRecurring =", duplicateRecurring, "| hidePastEvents =", hidePastEvents, "| range =", range, "| weekStartDay =", weekStartDay, "| label found:", !!label, "| prevBtn found:", !!prevBtn, "| nextBtn found:", !!nextBtn, "| todayBtn found:", !!todayBtn);
+    const entries = buildEntries(wrap, eventsBySlug);
+    console.log("[event-list] DEBUG buildListConfig: successfully paired entries:", entries.length, entries);
+    if (entries.length === 0) return null;
+    return { duplicateRecurring, hidePastEvents, range, weekStartDay, label, prevBtn, nextBtn, todayBtn, entries, list };
+  }
+  function initList(config, listInstance) {
+    const { duplicateRecurring, hidePastEvents, range, weekStartDay, label, prevBtn, nextBtn, todayBtn, entries, list } = config;
+    const eventByElement = new Map(entries.map(({ item, event }) => [item, event]));
+    console.log("[event-list] DEBUG initList: registering hook, listInstance =", listInstance);
+    let current = anchorFor(/* @__PURE__ */ new Date(), range, weekStartDay);
+    listInstance.addHook("filter", (items) => {
+      const { start: rangeStart, end: rangeEnd } = getRangeBounds(current, range);
+      console.log("[event-list] DEBUG filter hook FIRED. items received from Finsweet:", items.length, items, "| active range:", rangeStart, "-", rangeEnd);
+      const removedClones = list.querySelectorAll(`[${CLONE_ATTR}]`);
+      console.log("[event-list] DEBUG removing stale clones from previous pass:", removedClones.length);
+      removedClones.forEach((el) => el.remove());
+      const result = [];
+      items.forEach((listItem) => {
+        const event = eventByElement.get(listItem.element);
+        if (!event) {
+          console.log("[event-list] DEBUG no matching event for this listItem.element (stale/unrecognized) \u2014 dropping:", listItem.element);
+          return;
+        }
+        let occurrences = getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
+        if (hidePastEvents) {
+          const now = /* @__PURE__ */ new Date();
+          occurrences = occurrences.filter((occ) => occ.end >= now);
+        }
+        console.log("[event-list] DEBUG event", event.name, "-> occurrences in range:", occurrences.length);
+        listItem.element.style.display = occurrences.length === 0 ? "none" : "";
+        if (occurrences.length === 0) return;
+        const [first, ...rest] = occurrences;
+        setDateFields(listItem.element, first, event);
+        result.push({ listItem, date: first.start, showStartTime: event.showStartTime });
+        if (duplicateRecurring) {
+          let insertAfter = listItem.element;
+          rest.forEach((occ, i) => {
+            const clone = createOccurrenceCard(listItem.element, occ, event, `occ-${i + 1}`);
+            insertAfter.insertAdjacentElement("afterend", clone);
+            insertAfter = clone;
+            result.push({ listItem: listInstance.createItem(clone), date: occ.start, showStartTime: event.showStartTime });
+          });
+        }
+      });
+      result.sort(compareListEntries);
+      console.log("[event-list] DEBUG filter hook RETURNING", result.length, "items to Finsweet");
+      return result.map((r) => r.listItem);
+    });
+    const refresh = () => {
+      console.log("[event-list] DEBUG refresh() called \u2014 range now:", current);
+      if (label) {
+        const format = attr("", label.getAttribute("data-ix-events-label-format"));
+        label.textContent = range === "week" ? formatWeekLabel(current, format || void 0) : formatOccurrenceDate(current, format || "MMMM YYYY");
+      }
+      updateNavState();
+      listInstance.triggerHook("filter");
+    };
+    const updateNavState = () => {
+      if (prevBtn) prevBtn.classList.toggle(DISABLED_CLASS, isPrevDisabled(current, range, hidePastEvents));
+      if (todayBtn) todayBtn.classList.toggle(DISABLED_CLASS, isTodayDisabled(current, range));
+    };
+    refresh();
+    prevBtn?.addEventListener("click", () => {
+      if (isPrevDisabled(current, range, hidePastEvents)) return;
+      current = stepCurrent(current, range, -1);
+      refresh();
+    });
+    nextBtn?.addEventListener("click", () => {
+      current = stepCurrent(current, range, 1);
+      refresh();
+    });
+    todayBtn?.addEventListener("click", () => {
+      if (isTodayDisabled(current, range)) return;
+      current = anchorFor(/* @__PURE__ */ new Date(), range, weekStartDay);
+      refresh();
+    });
+  }
+  function isPrevDisabled(current, range, hidePastEvents) {
+    if (!hidePastEvents) return false;
+    const prevBounds = getRangeBounds(stepCurrent(current, range, -1), range);
+    return prevBounds.end < /* @__PURE__ */ new Date();
+  }
+  function isTodayDisabled(current, range) {
+    const { start, end } = getRangeBounds(current, range);
+    const now = /* @__PURE__ */ new Date();
+    return now >= start && now <= end;
+  }
+  function compareListEntries(a, b) {
+    const dayDiff = startOfDay2(a.date) - startOfDay2(b.date);
+    if (dayDiff !== 0) return dayDiff;
+    if (a.showStartTime !== b.showStartTime) return a.showStartTime ? -1 : 1;
+    return a.date - b.date;
+  }
+  var eventFeed = function() {
+    const wraps = [...document.querySelectorAll(WRAP)].filter(
+      (wrap) => wrap.getAttribute("data-ix-events-layout") === FEED_LAYOUT
+    );
+    console.log('[event-feed] DEBUG wraps with layout="feed" found:', wraps.length, wraps);
+    if (wraps.length === 0) return;
+    whenEvents((events) => {
+      console.log("[event-feed] DEBUG whenEvents callback fired, events received:", events.length, events);
+      const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
+      wraps.forEach((wrap) => {
+        whenListReady(wrap, false, () => initFeed(wrap, eventsBySlug));
+      });
+    });
+  };
+  function initFeed(wrap, eventsBySlug) {
+    const entries = buildEntries(wrap, eventsBySlug);
+    console.log("[event-feed] DEBUG initFeed: entries found for wrap:", entries.length, wrap);
+    if (entries.length === 0) return;
+    const duplicateRecurring = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-duplicate-recurring`));
+    const feedCount = attr(12, wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-count`));
+    let feedPeriod = attr("month", wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-period`)?.toLowerCase());
+    if (feedPeriod !== "month" && feedPeriod !== "week") feedPeriod = "month";
+    const feedDivider = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-divider`));
+    const feedDividerToday = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-divider-today`));
+    const container = entries[0].item.parentElement;
+    entries.forEach(({ item }) => {
+      item.style.display = "none";
+    });
+    const loadMoreBtn = wrap.querySelector(LOAD_MORE_BTN);
+    const dividerTemplate = wrap.querySelector(FEED_DIVIDER_EL);
+    const dividerTextEl = dividerTemplate?.querySelector(FEED_DIVIDER_TEXT_EL);
+    console.log("[event-feed] DEBUG initFeed: duplicateRecurring =", duplicateRecurring, "| feedCount =", feedCount, "| feedPeriod =", feedPeriod, "| feedDivider =", feedDivider, "| feedDividerToday =", feedDividerToday, "| loadMoreBtn found:", !!loadMoreBtn, "| dividerTemplate found:", !!dividerTemplate);
+    if (feedDivider && !dividerTemplate) {
+      console.warn('event-feed: feed-divider is enabled but no [data-ix-events="feed-divider"] element was found.', wrap);
+    }
+    let renderedCount = 0;
+    let currentDividerMonthKey = null;
+    function createDivider(text) {
+      const divider = dividerTemplate.cloneNode(true);
+      divider.classList.remove("u-hide");
+      const textEl = divider.querySelector(FEED_DIVIDER_TEXT_EL);
+      if (textEl) textEl.textContent = text;
+      return divider;
+    }
+    function loadMore() {
+      const now = /* @__PURE__ */ new Date();
+      const rangeStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const targetCount = renderedCount + feedCount;
+      let searchEnd = stepPeriodEnd(rangeStart, feedPeriod);
+      let merged = mergeOccurrences(entries, rangeStart, searchEnd, duplicateRecurring);
+      let iterations = 0;
+      while (merged.length < targetCount && iterations < FEED_SEARCH_CAP) {
+        searchEnd = stepPeriodEnd(searchEnd, feedPeriod);
+        merged = mergeOccurrences(entries, rangeStart, searchEnd, duplicateRecurring);
+        iterations++;
+      }
+      const batch = merged.slice(renderedCount, targetCount);
+      console.log("[event-feed] DEBUG loadMore: targetCount =", targetCount, "| total merged occurrences found:", merged.length, "(after", iterations, "extra search steps) | batch size:", batch.length);
+      if (batch.length === 0) {
+        if (loadMoreBtn) loadMoreBtn.style.display = "none";
+        return;
+      }
+      batch.forEach(({ item, event, occurrence }, i) => {
+        if (feedDivider && dividerTemplate) {
+          const monthKey = `${occurrence.start.getFullYear()}-${occurrence.start.getMonth()}`;
+          if (currentDividerMonthKey === null || monthKey !== currentDividerMonthKey) {
+            const isFirstDividerEver = currentDividerMonthKey === null;
+            const format = attr("MMMM, YYYY", dividerTextEl?.getAttribute("data-ix-events-date-format"));
+            const text = isFirstDividerEver && feedDividerToday ? "Today" : formatOccurrenceDate(occurrence.start, format);
+            container.appendChild(createDivider(text));
+            currentDividerMonthKey = monthKey;
+          }
+        }
+        container.appendChild(createOccurrenceCard(item, occurrence, event, `feed-${renderedCount + i}`));
+      });
+      renderedCount += batch.length;
+      if (batch.length < feedCount && loadMoreBtn) loadMoreBtn.style.display = "none";
+    }
+    loadMore();
+    loadMoreBtn?.addEventListener("click", loadMore);
+  }
+  function mergeOccurrences(entries, rangeStart, rangeEnd, duplicateRecurring) {
+    const merged = [];
+    entries.forEach(({ item, event }) => {
+      let occurrences = getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
+      if (!duplicateRecurring) occurrences = occurrences.slice(0, 1);
+      occurrences.forEach((occurrence) => merged.push({ item, event, occurrence }));
+    });
+    merged.sort((a, b) => {
+      const dayDiff = startOfDay2(a.occurrence.start) - startOfDay2(b.occurrence.start);
+      if (dayDiff !== 0) return dayDiff;
+      if (a.event.showStartTime !== b.event.showStartTime) return a.event.showStartTime ? -1 : 1;
+      return a.occurrence.start - b.occurrence.start;
+    });
+    return merged;
+  }
+  function buildEntries(wrap, eventsBySlug) {
     const cardItems = [...wrap.querySelectorAll(ITEM2)].filter((item) => item.querySelector(CARD_EL));
-    console.log("[event-list] DEBUG buildListConfig: items with a card descendant found in wrap:", cardItems.length, cardItems);
-    if (cardItems.length === 0) return null;
-    const entries = cardItems.map((item) => {
+    if (cardItems.length === 0) return [];
+    return cardItems.map((item) => {
       const dataEl = item.querySelector(DATA_EL2);
       let event;
       if (dataEl) {
@@ -335,80 +532,45 @@
       }
       return event.startDate ? { item, event } : null;
     }).filter(Boolean);
-    console.log("[event-list] DEBUG buildListConfig: successfully paired entries:", entries.length, entries);
-    if (entries.length === 0) return null;
-    const list = entries[0].item.parentElement;
-    console.log("[event-list] DEBUG buildListConfig: resolved `list` container element:", list);
-    return { duplicateRecurring, range, weekStartDay, label, prevBtn, nextBtn, todayBtn, entries, list };
   }
-  function initList(config, listInstance) {
-    const { duplicateRecurring, range, weekStartDay, label, prevBtn, nextBtn, todayBtn, entries, list } = config;
-    const eventByElement = new Map(entries.map(({ item, event }) => [item, event]));
-    console.log("[event-list] DEBUG initList: registering hook, listInstance =", listInstance);
-    let current = anchorFor(/* @__PURE__ */ new Date(), range, weekStartDay);
-    listInstance.addHook("filter", (items) => {
-      const { start: rangeStart, end: rangeEnd } = getRangeBounds(current, range);
-      console.log("[event-list] DEBUG filter hook FIRED. items received from Finsweet:", items.length, items, "| active range:", rangeStart, "-", rangeEnd);
-      const removedClones = list.querySelectorAll(`[${CLONE_ATTR}]`);
-      console.log("[event-list] DEBUG removing stale clones from previous pass:", removedClones.length);
-      removedClones.forEach((el) => el.remove());
-      const result = [];
-      items.forEach((listItem) => {
-        const event = eventByElement.get(listItem.element);
-        if (!event) {
-          console.log("[event-list] DEBUG no matching event for this listItem.element (stale/unrecognized) \u2014 dropping:", listItem.element);
+  function whenListReady(wrap, required, callback) {
+    const list = wrap.querySelector(FS_LIST_SELECTOR);
+    if (!list) {
+      if (required) {
+        console.warn('event-list: no element with fs-list-element="list" found inside this wrap.', wrap);
+        return;
+      }
+      callback(null);
+      return;
+    }
+    window.FinsweetAttributes ||= [];
+    window.FinsweetAttributes.push([
+      "list",
+      (listInstances) => {
+        const listInstance = listInstances.find((l) => l.listElement === list);
+        if (!listInstance) {
+          if (required) {
+            console.warn(
+              'event-list: no Finsweet List instance found for this Collection List \u2014 add fs-list-element="list" to it.',
+              list
+            );
+            return;
+          }
+          callback(null);
           return;
         }
-        const occurrences = getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
-        console.log("[event-list] DEBUG event", event.name, "-> occurrences in range:", occurrences.length);
-        if (occurrences.length === 0) return;
-        const [first, ...rest] = occurrences;
-        setDateFields(listItem.element, first, event);
-        result.push({ listItem, date: first.start, showStartTime: event.showStartTime });
-        if (duplicateRecurring) {
-          let insertAfter = listItem.element;
-          rest.forEach((occ, i) => {
-            const clone = listItem.element.cloneNode(true);
-            clone.setAttribute(CLONE_ATTR, "");
-            uniquifyIds(clone, `occ-${i + 1}`);
-            setDateFields(clone, occ, event);
-            insertAfter.insertAdjacentElement("afterend", clone);
-            insertAfter = clone;
-            result.push({ listItem: listInstance.createItem(clone), date: occ.start, showStartTime: event.showStartTime });
-          });
-        }
-      });
-      result.sort(compareListEntries);
-      console.log("[event-list] DEBUG filter hook RETURNING", result.length, "items to Finsweet");
-      return result.map((r) => r.listItem);
-    });
-    const refresh = () => {
-      console.log("[event-list] DEBUG refresh() called \u2014 range now:", current);
-      if (label) {
-        const format = label.getAttribute("data-ix-events-label-format");
-        label.textContent = range === "week" ? formatWeekLabel(current, format) : formatOccurrenceDate(current, format || "MMMM YYYY");
+        Promise.resolve(listInstance.loadingPaginatedItems).then(() => callback(listInstance));
       }
-      listInstance.triggerHook("filter");
-    };
-    refresh();
-    prevBtn?.addEventListener("click", () => {
-      current = stepCurrent(current, range, -1);
-      refresh();
-    });
-    nextBtn?.addEventListener("click", () => {
-      current = stepCurrent(current, range, 1);
-      refresh();
-    });
-    todayBtn?.addEventListener("click", () => {
-      current = anchorFor(/* @__PURE__ */ new Date(), range, weekStartDay);
-      refresh();
-    });
+    ]);
   }
-  function compareListEntries(a, b) {
-    const dayDiff = startOfDay2(a.date) - startOfDay2(b.date);
-    if (dayDiff !== 0) return dayDiff;
-    if (a.showStartTime !== b.showStartTime) return a.showStartTime ? -1 : 1;
-    return a.date - b.date;
+  function createOccurrenceCard(templateItem, occurrence, event, suffix) {
+    const clone = templateItem.cloneNode(true);
+    clone.style.display = "";
+    clone.setAttribute(CLONE_ATTR, "");
+    uniquifyIds(clone, suffix);
+    setDateFields(clone, occurrence, event);
+    watchAndUnhide(clone);
+    return clone;
   }
   function startOfDay2(date) {
     return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
@@ -439,9 +601,15 @@
     next.setMonth(next.getMonth() + direction);
     return next;
   }
+  function stepPeriodEnd(date, period) {
+    if (period === "week") return addDays2(date, 7);
+    const next = new Date(date.getFullYear(), date.getMonth(), 1);
+    next.setMonth(next.getMonth() + 1);
+    return next;
+  }
   function setDateFields(root, occurrence, event) {
     root.querySelectorAll(DATE_EL).forEach((el) => {
-      const format = el.getAttribute("data-ix-events-date-format") || "MMMM D, YYYY";
+      const format = attr("MMMM D, YYYY", el.getAttribute("data-ix-events-date-format"));
       el.textContent = isFullDateFormat(format) ? formatFullDate(occurrence, event) : formatOccurrenceDate(occurrence.start, format);
     });
   }
@@ -519,6 +687,12 @@
     const minuteText = minutes === 0 ? "" : `:${pad2(minutes)}`;
     return `${h12}${minuteText}${period}`;
   }
+  function watchAndUnhide(el) {
+    const observer = new MutationObserver(() => {
+      if (el.style.display === "none") el.style.display = "";
+    });
+    observer.observe(el, { attributes: true, attributeFilter: ["style"] });
+  }
   function uniquifyIds(root, suffix) {
     if (root.hasAttribute("id")) root.id = `${root.id}-${suffix}`;
     root.removeAttribute("data-w-id");
@@ -532,7 +706,7 @@
 
   // src/calendar.js
   var ANIMATION_ID2 = "events";
-  var LAYOUT2 = "calendar";
+  var LAYOUT = "calendar";
   var WRAP2 = '[data-ix-events="wrap"]';
   var MONTH_FULL2 = [
     "January",
@@ -557,7 +731,7 @@
   var stylesInjected = false;
   var calendar = function() {
     const wraps = [...document.querySelectorAll(WRAP2)].filter(
-      (wrap) => wrap.getAttribute("data-ix-events-layout") === LAYOUT2
+      (wrap) => wrap.getAttribute("data-ix-events-layout") === LAYOUT
     );
     if (wraps.length === 0) return;
     injectStyles();
@@ -1039,6 +1213,7 @@
   // src/index.js
   document.addEventListener("DOMContentLoaded", function() {
     eventList();
+    eventFeed();
     calendar();
   });
 })();

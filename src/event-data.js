@@ -18,6 +18,14 @@ import { parseEventFromJSON } from './recurrence';
 // this same Collection List (each item carrying both the JSON and the card —
 // see event-list.js's own item scan) or in a completely separate Collection
 // List — event-list.js handles both, matching by slug in the separate case.
+//
+// More than ~100 events: Webflow only renders a Collection List's first ~100
+// items natively. To go beyond that, add Finsweet's fs-list-element="list"
+// and fs-list-load="all" to the data-wrap — when present, this module waits
+// for Finsweet to finish loading every paginated page (via the List instance's
+// `loadingPaginatedItems` promise) before scanning for events, so nothing past
+// the first page gets silently missed. Sites that don't need this (under 100
+// events) can leave both attributes off — behavior is unchanged either way.
 // ============================================================================
 
 const DATA_WRAP = '[data-ix-events="data-wrap"]';
@@ -53,7 +61,27 @@ export function whenEvents(callback) {
       return;
     }
 
-    const events = items
+    // Registered with Finsweet (fs-list-element="list") — e.g. because
+    // fs-list-load="all" is also set to load past Webflow's ~100-item cap.
+    // Wait for every paginated page to finish loading before scanning, so
+    // this only ever runs against the final, complete item set.
+    if (dataWrap.getAttribute('fs-list-element') === 'list') {
+      window.FinsweetAttributes ||= [];
+      window.FinsweetAttributes.push([
+        'list',
+        (listInstances) => {
+          const listInstance = listInstances.find((l) => l.listElement === dataWrap);
+          Promise.resolve(listInstance?.loadingPaginatedItems).then(() => finish(dataWrap));
+        },
+      ]);
+      return;
+    }
+
+    finish(dataWrap);
+  };
+
+  const finish = (dataWrap) => {
+    const events = [...dataWrap.querySelectorAll(ITEM)]
       .map((item) => {
         const dataEl = item.querySelector(DATA_EL);
         if (!dataEl) return null;
