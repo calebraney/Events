@@ -1,9 +1,862 @@
-(()=>{var S=function(e,t){let n=typeof e;return typeof t!="string"||t.trim()===""?e:t?.toLowerCase()==="true"&&n==="boolean"?!0:t?.toLowerCase()==="false"&&n==="boolean"?!1:isNaN(t)&&n==="string"?t:!isNaN(t)&&n==="number"?+t:e};var ge={Sun:0,Mon:1,Tue:2,Wed:3,Thu:4,Fri:5,Sat:6};function Y(e,t,n){let{startDate:r,endDate:o,recurringEndDate:a,recurringFrequency:s="None",recurringInterval:d=1,recurringDays:m=[],recurringSkipDates:i=[]}=e;if(!r)return[];if(!s||s==="None"){let h=o||r;return h<t||r>n?[]:[{start:r,end:h}]}let l=d>0?d:1,u=new Set(i),c=w(r),p=a?w(a):null,g=o?o.getHours():r.getHours(),f=o?o.getMinutes():r.getMinutes(),v=s==="Weekly"&&m.length>0,x=o&&!v?U(c,w(o)):0,D=r>t?r:t,y=p&&p<n?p:n,M=w(y),b=D>r?w(D):c;if(b>M)return[];let F=m.length?m.map(h=>ge[h]).filter(h=>h!==void 0):[r.getDay()],R=h=>{switch(s){case"Daily":return U(c,h)%l===0;case"Weekly":return F.includes(h.getDay())&&ye(K(c),K(h))%l===0;case"Monthly (same date)":{let k=Math.min(r.getDate(),V(h.getFullYear(),h.getMonth()));return h.getDate()===k&&Q(c,h)%l===0}case"Monthly (same day of the week)":return h.getDay()===r.getDay()&&Math.ceil(h.getDate()/7)===Math.ceil(r.getDate()/7)&&Q(c,h)%l===0;case"Yearly":{let k=Math.min(r.getDate(),V(h.getFullYear(),r.getMonth()));return h.getMonth()===r.getMonth()&&h.getDate()===k&&(h.getFullYear()-r.getFullYear())%l===0}default:return!1}},E=[];for(;b<=M;)R(b)&&!u.has(De(b))&&E.push({start:ee(b,r.getHours(),r.getMinutes()),end:ee(Z(b,x),g,f)}),b=Z(b,1);return E}function $(e){return{id:e.slug||e.name,name:e.name||"",slug:e.slug||"",startDate:j(e.startDateTime),endDate:j(e.endDateTime),recurringEndDate:he(e.recurringEndDate),showStartTime:H(e.showStartTime),showEndTime:H(e.showEndTime),showEndDate:H(e.showEndDate),eventType:e.eventType||"",shortDescription:e.shortDescription||"",location:e.location||"",address:e.address||"",timezone:e.timezone||"",recurringFrequency:e.recurringFrequency&&e.recurringFrequency.trim()?e.recurringFrequency.trim():"None",recurringInterval:pe(e.recurringInterval),recurringDays:X(e.recurringDays),recurringSkipDates:X(e.recurringSkipDates)}}function j(e){if(!e)return null;let t=e.trim();if(!t)return null;let n=t.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})\s*(am|pm)$/i);if(n){let[,o,a,s,d,m,i]=n,l=parseInt(d,10);return i.toLowerCase()==="pm"&&l<12&&(l+=12),i.toLowerCase()==="am"&&l===12&&(l=0),new Date(+o,+a-1,+s,l,+m)}let r=new Date(t);return isNaN(r.getTime())?null:r}var fe=["January","February","March","April","May","June","July","August","September","October","November","December"];function he(e){if(!e)return null;let t=e.trim();if(!t)return null;let n=t.match(/^([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})$/);if(n){let[,o,a,s]=n,d=fe.findIndex(m=>m.toLowerCase()===o.toLowerCase());if(d!==-1)return new Date(+s,d,+a)}let r=new Date(t);return isNaN(r.getTime())?null:r}function pe(e){if(e==null)return 1;let t=String(e).trim();if(t===""||t==="-1")return 1;let n=parseInt(t,10);return Number.isFinite(n)&&n>0?n:1}function X(e){return e?e.split(",").map(t=>t.trim()).filter(Boolean):[]}function H(e){return typeof e=="boolean"?e:typeof e=="string"?e.trim().toLowerCase()==="true":!1}function w(e){return new Date(e.getFullYear(),e.getMonth(),e.getDate())}function K(e){let t=w(e);return t.setDate(t.getDate()-t.getDay()),t}function Z(e,t){return new Date(e.getFullYear(),e.getMonth(),e.getDate()+t)}function U(e,t){return Math.round((w(t)-w(e))/864e5)}function ye(e,t){return Math.round(U(e,t)/7)}function Q(e,t){return(t.getFullYear()-e.getFullYear())*12+(t.getMonth()-e.getMonth())}function V(e,t){return new Date(e,t+1,0).getDate()}function ee(e,t,n){return new Date(e.getFullYear(),e.getMonth(),e.getDate(),t,n)}function De(e){let t=e.getFullYear(),n=String(e.getMonth()+1).padStart(2,"0"),r=String(e.getDate()).padStart(2,"0");return`${t}-${n}-${r}`}var te='[data-ix-events="data-wrap"]',ve='[data-ix-events="item"]',be='[data-ix-events="data"]',xe=20,Me=300;function N(e){let t=0,n=()=>{let r=document.querySelectorAll(te);r.length>1&&console.warn(`events: found ${r.length} elements matching ${te} \u2014 using the first one. Remove the extras to avoid duplicate or conflicting event data.`);let o=r[0],a=o?[...o.querySelectorAll(ve)]:[];if(a.length===0){if(t++,t<xe){setTimeout(n,Me);return}e([]);return}let s=a.map(d=>{let m=d.querySelector(be);if(!m)return null;try{let i=$(JSON.parse(m.textContent));return i.startDate?i:null}catch(i){return console.warn("events: could not parse event JSON",d,i),null}}).filter(Boolean);e(s)};n()}var q="events",we="list",Ee='[data-ix-events="wrap"]',_e='[data-ix-events="prev"]',Se='[data-ix-events="next"]',Te='[data-ix-events="today"]',ke='[data-ix-events="label"]',Ae='[data-ix-events="item"]',Fe='[data-ix-events="data"]',Ye='[data-ix-events="card"]',$e='[data-ix-events="date"]',ne="data-ix-events-slug",re="data-ix-events-clone",Ne=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],Le=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"],Be=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"],W=["January","February","March","April","May","June","July","August","September","October","November","December"],se=function(){let e=[...document.querySelectorAll(Ee)].filter(t=>t.getAttribute("data-ix-events-layout")===we);console.log('[event-list] DEBUG wraps with layout="list" found:',e.length,e),e.length!==0&&N(t=>{console.log("[event-list] DEBUG whenEvents callback fired, events received:",t.length,t);let n=new Map(t.map(o=>[o.slug,o])),r=e.map(o=>Oe(o,n)).filter(Boolean);console.log("[event-list] DEBUG configs built:",r.length,r),r.length!==0&&(window.FinsweetAttributes||(window.FinsweetAttributes=[]),window.FinsweetAttributes.push(["list",o=>{console.log("[event-list] DEBUG Finsweet list callback fired, listInstances found:",o.length,o),r.forEach(a=>{let s=o.find(d=>d.listElement===a.list);if(console.log("[event-list] DEBUG matching Finsweet instance for config.list:",a.list,"-> found:",!!s),!s){console.warn('event-list: no Finsweet List instance found for this Collection List \u2014 add fs-list-element="list" to it.',a.list);return}Ce(a,s)})}]))})};function Oe(e,t){let n=S(!0,e.getAttribute(`data-ix-${q}-duplicate-recurring`)),r=S("month",e.getAttribute(`data-ix-${q}-range`));r!=="month"&&r!=="week"&&(r="month");let o=S("sunday",e.getAttribute(`data-ix-${q}-week-start`))==="monday"?1:0,a=e.querySelector(ke),s=e.querySelector(_e),d=e.querySelector(Se),m=e.querySelector(Te);console.log("[event-list] DEBUG buildListConfig: duplicateRecurring =",n,"| range =",r,"| weekStartDay =",o,"| label found:",!!a,"| prevBtn found:",!!s,"| nextBtn found:",!!d,"| todayBtn found:",!!m);let i=[...e.querySelectorAll(Ae)].filter(c=>c.querySelector(Ye));if(console.log("[event-list] DEBUG buildListConfig: items with a card descendant found in wrap:",i.length,i),i.length===0)return null;let l=i.map(c=>{let p=c.querySelector(Fe),g;if(p)try{g=$(JSON.parse(p.textContent))}catch(f){return console.warn("event-list: could not parse event JSON",c,f),null}else{let f=c.getAttribute(ne);if(g=f?t.get(f):null,!g)return console.warn(`event-list: no matching event data for slug "${f}" \u2014 bind ${ne} on this card to the Slug field.`,c),null}return g.startDate?{item:c,event:g}:null}).filter(Boolean);if(console.log("[event-list] DEBUG buildListConfig: successfully paired entries:",l.length,l),l.length===0)return null;let u=l[0].item.parentElement;return console.log("[event-list] DEBUG buildListConfig: resolved `list` container element:",u),{duplicateRecurring:n,range:r,weekStartDay:o,label:a,prevBtn:s,nextBtn:d,todayBtn:m,entries:l,list:u}}function Ce(e,t){let{duplicateRecurring:n,range:r,weekStartDay:o,label:a,prevBtn:s,nextBtn:d,todayBtn:m,entries:i,list:l}=e,u=new Map(i.map(({item:g,event:f})=>[g,f]));console.log("[event-list] DEBUG initList: registering hook, listInstance =",t);let c=oe(new Date,r,o);t.addHook("filter",g=>{let{start:f,end:v}=Ue(c,r);console.log("[event-list] DEBUG filter hook FIRED. items received from Finsweet:",g.length,g,"| active range:",f,"-",v);let x=l.querySelectorAll(`[${re}]`);console.log("[event-list] DEBUG removing stale clones from previous pass:",x.length),x.forEach(y=>y.remove());let D=[];return g.forEach(y=>{let M=u.get(y.element);if(!M){console.log("[event-list] DEBUG no matching event for this listItem.element (stale/unrecognized) \u2014 dropping:",y.element);return}let b=Y(M,f,v).sort((E,h)=>E.start-h.start);if(console.log("[event-list] DEBUG event",M.name,"-> occurrences in range:",b.length),b.length===0)return;let[F,...R]=b;if(ie(y.element,F,M),D.push({listItem:y,date:F.start,showStartTime:M.showStartTime}),n){let E=y.element;R.forEach((h,k)=>{let _=y.element.cloneNode(!0);_.setAttribute(re,""),ze(_,`occ-${k+1}`),ie(_,h,M),E.insertAdjacentElement("afterend",_),E=_,D.push({listItem:t.createItem(_),date:h.start,showStartTime:M.showStartTime})})}}),D.sort(Re),console.log("[event-list] DEBUG filter hook RETURNING",D.length,"items to Finsweet"),D.map(y=>y.listItem)});let p=()=>{if(console.log("[event-list] DEBUG refresh() called \u2014 range now:",c),a){let g=a.getAttribute("data-ix-events-label-format");a.textContent=r==="week"?Ie(c,g):T(c,g||"MMMM YYYY")}t.triggerHook("filter")};p(),s?.addEventListener("click",()=>{c=ae(c,r,-1),p()}),d?.addEventListener("click",()=>{c=ae(c,r,1),p()}),m?.addEventListener("click",()=>{c=oe(new Date,r,o),p()})}function Re(e,t){let n=B(e.date)-B(t.date);return n!==0?n:e.showStartTime!==t.showStartTime?e.showStartTime?-1:1:e.date-t.date}function B(e){return new Date(e.getFullYear(),e.getMonth(),e.getDate()).getTime()}function O(e,t){return new Date(e.getFullYear(),e.getMonth(),e.getDate()+t)}function He(e,t){let n=(e.getDay()-t+7)%7;return O(e,-n)}function oe(e,t,n){return t==="week"?He(e,n):new Date(e.getFullYear(),e.getMonth(),1)}function Ue(e,t){if(t==="week"){let n=O(e,6);return{start:e,end:new Date(n.getFullYear(),n.getMonth(),n.getDate(),23,59,59)}}return{start:e,end:new Date(e.getFullYear(),e.getMonth()+1,0,23,59,59)}}function ae(e,t,n){if(t==="week")return O(e,7*n);let r=new Date(e.getFullYear(),e.getMonth(),1);return r.setMonth(r.getMonth()+n),r}function ie(e,t,n){e.querySelectorAll($e).forEach(r=>{let o=r.getAttribute("data-ix-events-date-format")||"MMMM D, YYYY";r.textContent=Ge(o)?We(t,n):T(t.start,o)})}var L=e=>String(e).padStart(2,"0"),J=e=>e%10===1&&e%100!==11?`${e}st`:e%10===2&&e%100!==12?`${e}nd`:e%10===3&&e%100!==13?`${e}rd`:`${e}th`,qe=/YYYY|YY|MMMM|MMM|MM|M|DD|Do|D|dddd|ddd|mm|H|h|A|a/g;function T(e,t){let n=e.getHours(),r={YYYY:()=>String(e.getFullYear()),YY:()=>String(e.getFullYear()).slice(-2),MMMM:()=>W[e.getMonth()],MMM:()=>Be[e.getMonth()],MM:()=>L(e.getMonth()+1),M:()=>String(e.getMonth()+1),DD:()=>L(e.getDate()),Do:()=>J(e.getDate()),D:()=>String(e.getDate()),dddd:()=>Le[e.getDay()],ddd:()=>Ne[e.getDay()],mm:()=>L(e.getMinutes()),H:()=>String(n),h:()=>String(n%12||12),A:()=>n>=12?"PM":"AM",a:()=>n>=12?"pm":"am"};return t.replace(qe,o=>r[o]())}function Ie(e,t){let n=O(e,6);if(t)return`${T(e,t)} - ${T(n,t)}`;let o=e.getFullYear()!==n.getFullYear()?"MMM D, YYYY":"MMM D";return`${T(e,o)} - ${T(n,"MMM D, YYYY")}`}function Ge(e){return e.trim().toUpperCase()==="FULLDATE"}function We(e,t){let{start:n,end:r}=e,{showStartTime:o,showEndTime:a,showEndDate:s}=t,m=s&&B(r)!==B(n)?Je(n,r):G(n);if(!o)return m;if(!a)return`${m} at ${I(n)}`;let i=I(n),l=I(r),u=n.getHours()>=12?"pm":"am",c=r.getHours()>=12?"pm":"am",p=n.getHours()%12||12,f=u===c&&p!==12?i.slice(0,-2):i;return`${m}, ${f}-${l}`}function G(e){return`${W[e.getMonth()]} ${J(e.getDate())}`}function Je(e,t){return e.getMonth()===t.getMonth()&&e.getFullYear()===t.getFullYear()?`${W[e.getMonth()]} ${e.getDate()}-${J(t.getDate())}`:`${G(e)} - ${G(t)}`}function I(e){let t=e.getHours(),n=e.getMinutes(),r=t%12||12,o=t>=12?"pm":"am",a=n===0?"":`:${L(n)}`;return`${r}${a}${o}`}function ze(e,t){e.hasAttribute("id")&&(e.id=`${e.id}-${t}`),e.removeAttribute("data-w-id"),e.querySelectorAll("[id]").forEach(n=>{n.id=`${n.id}-${t}`}),e.querySelectorAll("[data-w-id]").forEach(n=>{n.removeAttribute("data-w-id")})}var Pe="events",je="calendar",Xe='[data-ix-events="wrap"]',Ke=["January","February","March","April","May","June","July","August","September","October","November","December"],Ze=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],le=[["--_theme---text--text-accent","#2563eb"],["--_theme---border--border-secondary","#6b7280"],["--_theme---text--text-primary","#1f2937"]],ce=!1,me=function(){let e=[...document.querySelectorAll(Xe)].filter(t=>t.getAttribute("data-ix-events-layout")===je);e.length!==0&&(ut(),e.forEach(t=>Qe(t)))};function Qe(e){let t=S(6,e.getAttribute(`data-ix-${Pe}-months`)),n=new Date,r={year:n.getFullYear(),month:n.getMonth(),events:[],loading:!0};e.classList.add("ix-calendar"),e.style.position="relative",e.innerHTML="";let o=Ve(),a=et(),s=tt(),d=nt();e.append(o.el,a.weekdayRow,a.gridEl,s,d.el);let m=new Date(n.getFullYear(),n.getMonth()-t,1),i=new Date(n.getFullYear(),n.getMonth()+t,1),l=()=>new Date(r.year,r.month-1,1)>=m,u=()=>new Date(r.year,r.month+1,1)<=i;o.prevBtn.addEventListener("click",()=>{l()&&(c(-1),p())}),o.nextBtn.addEventListener("click",()=>{u()&&(c(1),p())});function c(g){let f=new Date(r.year,r.month+g,1);r.year=f.getFullYear(),r.month=f.getMonth()}function p(){o.label.textContent=`${Ke[r.month]} ${r.year}`,o.prevBtn.disabled=!l(),o.nextBtn.disabled=!u();let g=new Date(r.year,r.month-1,1),f=new Date(r.year,r.month+2,0,23,59,59),v=[];r.events.forEach(x=>{Y(x,g,f).forEach(D=>{v.push({event:x,start:D.start,end:D.end})})}),rt(a,r.year,r.month,v,n,d,e)}p(),N(g=>{let f=g.length===0;if(r.events=f?st():g,r.loading=!1,s.style.display="none",f){let v=document.createElement("p");v.className="ix-calendar_demo-note",v.textContent="No events data-wrap found on this page \u2014 showing sample data.",e.append(v)}p()})}function Ve(){let e=document.createElement("div");e.className="ix-calendar_header";let t=document.createElement("button");t.type="button",t.className="ix-calendar_nav-btn",t.setAttribute("aria-label","Previous month"),t.innerHTML=de("M15 18l-6-6 6-6");let n=document.createElement("h2");n.className="ix-calendar_label";let r=document.createElement("button");return r.type="button",r.className="ix-calendar_nav-btn",r.setAttribute("aria-label","Next month"),r.innerHTML=de("M9 18l6-6-6-6"),e.append(t,n,r),{el:e,prevBtn:t,label:n,nextBtn:r}}function de(e){return`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${e}"/></svg>`}function et(){let e=document.createElement("div");e.className="ix-calendar_weekdays",Ze.forEach(n=>{let r=document.createElement("div");r.className="ix-calendar_weekday",r.textContent=n,e.append(r)});let t=document.createElement("div");return t.className="ix-calendar_grid",{weekdayRow:e,gridEl:t}}function tt(){let e=document.createElement("div");return e.className="ix-calendar_loading",e.textContent="Loading events\u2026",e}function nt(){let e=document.createElement("div");return e.className="ix-calendar_tooltip",e.style.display="none",{el:e}}function rt(e,t,n,r,o,a,s){e.gridEl.innerHTML="";let d=new Date(t,n,1).getDay(),m=ue(t,n),i=ue(n===0?t-1:t,n===0?11:n-1),l=[];for(let u=d-1;u>=0;u--){let c=i-u;l.push({date:new Date(n===0?t-1:t,n===0?11:n-1,c),inMonth:!1})}for(let u=1;u<=m;u++)l.push({date:new Date(t,n,u),inMonth:!0});for(;l.length<42;){let u=l[l.length-1].date;l.push({date:lt(u,1),inMonth:!1})}l.forEach((u,c)=>{let p=document.createElement("div");p.className="ix-calendar_day",u.inMonth||p.classList.add("is-outside"),(c+1)%7===0&&p.classList.add("is-last-col");let g=u.inMonth&&A(u.date,o),f=document.createElement("div");f.className="ix-calendar_day-number-row";let v=document.createElement("span");if(v.className="ix-calendar_day-number"+(g?" is-today":""),v.textContent=String(u.date.getDate()),f.append(v),p.append(f),u.inMonth){let x=r.filter(y=>ct(u.date,y.start,y.end)),D=document.createElement("div");if(D.className="ix-calendar_day-events",x.slice(0,2).forEach(y=>{D.append(ot(y,u.date,r,a,s))}),x.length>2){let y=document.createElement("span");y.className="ix-calendar_more",y.textContent=`+${x.length-2} more`,D.append(y)}p.append(D)}e.gridEl.append(p)})}function ot(e,t,n,r,o){let a=A(t,e.start),s=A(t,e.end),d=a&&s?"single":a?"start":s?"end":"middle",m=le[dt(e.event.id)%le.length],i=document.createElement("a");return i.className=`ix-calendar_pill is-${d}`,i.href=`/event/${e.event.slug}`,i.style.setProperty("--pill-color",`var(${m[0]}, ${m[1]})`),i.textContent=d==="single"||d==="start"?e.event.name:"\xA0",i.addEventListener("mouseenter",()=>at(r,e,i,o)),i.addEventListener("mouseleave",()=>it(r)),i}function at(e,t,n,r){let{event:o,start:a,end:s}=t,d=r.getBoundingClientRect(),m=n.getBoundingClientRect(),i=a.toLocaleDateString("en-US",{month:"short",day:"numeric"});A(a,s)||(i+=` \u2013 ${s.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`),o.showStartTime&&(i+=` \xB7 ${P(a)}`),o.showEndTime&&!A(a,s)?i+=` \u2013 ${P(s)}`:o.showEndTime&&o.showStartTime&&s.getTime()!==a.getTime()&&(i+=` \u2013 ${P(s)}`),e.el.innerHTML=`
-    <h3 class="ix-calendar_tooltip-title">${C(o.name)}</h3>
-    <div class="ix-calendar_tooltip-meta">${C(i)}</div>
-    ${o.location?`<div class="ix-calendar_tooltip-meta">${C(o.location)}</div>`:""}
-    ${o.shortDescription?`<p class="ix-calendar_tooltip-desc">${C(o.shortDescription)}</p>`:""}
-  `;let l=256,u=m.left-d.left+m.width/2,c=Math.max(l/2,Math.min(u,d.width-l/2));e.el.style.left=`${c}px`,e.el.style.top=`${m.top-d.top}px`,e.el.style.display="block"}function it(e){e.el.style.display="none"}function st(){let e=new Date,t=e.getFullYear(),n=e.getMonth();return[{id:"demo-1",name:"Community Meetup",slug:"community-meetup",startDate:new Date(t,n,8,18,0),endDate:new Date(t,n,8,20,0),showStartTime:!0,showEndTime:!0,showEndDate:!1,shortDescription:"Join us for our monthly community gathering.",location:"Community Center",timezone:"",recurringFrequency:"None",recurringInterval:1,recurringDays:[],recurringSkipDates:[]},{id:"demo-2",name:"Volunteer Week",slug:"volunteer-week",startDate:new Date(t,n,20,9,0),endDate:new Date(t,n,24,17,0),showStartTime:!1,showEndTime:!1,showEndDate:!0,shortDescription:"A full week of volunteer opportunities.",location:"Various Locations",timezone:"",recurringFrequency:"None",recurringInterval:1,recurringDays:[],recurringSkipDates:[]},{id:"demo-3",name:"Small Group",slug:"small-group",startDate:new Date(t,n,3,18,0),endDate:new Date(t,n,3,19,30),showStartTime:!0,showEndTime:!0,showEndDate:!1,shortDescription:"Biweekly small group discussion.",location:"Room 204",timezone:"",recurringFrequency:"Weekly",recurringInterval:2,recurringDays:[],recurringSkipDates:[]}]}function ue(e,t){return new Date(e,t+1,0).getDate()}function lt(e,t){return new Date(e.getFullYear(),e.getMonth(),e.getDate()+t)}function z(e){return new Date(e.getFullYear(),e.getMonth(),e.getDate())}function A(e,t){return e.getFullYear()===t.getFullYear()&&e.getMonth()===t.getMonth()&&e.getDate()===t.getDate()}function ct(e,t,n){let r=z(e);return r>=z(t)&&r<=z(n)}function P(e){let t=e.getHours(),n=e.getMinutes(),r=t>=12?"PM":"AM";return t=t%12||12,n===0?`${t} ${r}`:`${t}:${String(n).padStart(2,"0")} ${r}`}function dt(e){let t=0;for(let n=0;n<e.length;n++)t=t*31+e.charCodeAt(n)>>>0;return t}function C(e){let t=document.createElement("div");return t.textContent=e,t.innerHTML}function ut(){if(ce)return;ce=!0;let e=document.createElement("style");e.textContent=`
+(() => {
+  // bin/live-reload.js
+  new EventSource(`http://localhost:3000/esbuild`).addEventListener(
+    "change",
+    () => location.reload()
+  );
+
+  // src/utilities.js
+  var attr = function(defaultVal, attrVal) {
+    const defaultValType = typeof defaultVal;
+    if (typeof attrVal !== "string" || attrVal.trim() === "") return defaultVal;
+    if (attrVal?.toLowerCase() === "true" && defaultValType === "boolean") return true;
+    if (attrVal?.toLowerCase() === "false" && defaultValType === "boolean") return false;
+    if (isNaN(attrVal) && defaultValType === "string") return attrVal;
+    if (!isNaN(attrVal) && defaultValType === "number") return +attrVal;
+    return defaultVal;
+  };
+
+  // src/recurrence.js
+  var WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  function getOccurrences(event, rangeStart, rangeEnd) {
+    const {
+      startDate,
+      endDate,
+      recurringEndDate,
+      recurringFrequency = "None",
+      recurringInterval = 1,
+      recurringDays = [],
+      recurringSkipDates = []
+    } = event;
+    if (!startDate) return [];
+    if (!recurringFrequency || recurringFrequency === "None") {
+      const occEnd = endDate || startDate;
+      if (occEnd < rangeStart || startDate > rangeEnd) return [];
+      return [{ start: startDate, end: occEnd }];
+    }
+    const interval = recurringInterval > 0 ? recurringInterval : 1;
+    const skipSet = new Set(recurringSkipDates);
+    const startDay = startOfDay(startDate);
+    const seriesEndDate = recurringEndDate ? startOfDay(recurringEndDate) : null;
+    const endHours = endDate ? endDate.getHours() : startDate.getHours();
+    const endMinutes = endDate ? endDate.getMinutes() : startDate.getMinutes();
+    const usesRecurringDays = recurringFrequency === "Weekly" && recurringDays.length > 0;
+    const endDayOffset = endDate && !usesRecurringDays ? daysBetween(startDay, startOfDay(endDate)) : 0;
+    const loopStart = startDate > rangeStart ? startDate : rangeStart;
+    const loopEndDate = seriesEndDate && seriesEndDate < rangeEnd ? seriesEndDate : rangeEnd;
+    const finalDay = startOfDay(loopEndDate);
+    let cursor = loopStart > startDate ? startOfDay(loopStart) : startDay;
+    if (cursor > finalDay) return [];
+    const targetWeekdays = recurringDays.length ? recurringDays.map((d) => WEEKDAY_INDEX[d]).filter((n) => n !== void 0) : [startDate.getDay()];
+    const matchesFrequency = (day) => {
+      switch (recurringFrequency) {
+        case "Daily":
+          return daysBetween(startDay, day) % interval === 0;
+        case "Weekly":
+          return targetWeekdays.includes(day.getDay()) && weeksBetween(startOfWeek(startDay), startOfWeek(day)) % interval === 0;
+        case "Monthly (same date)": {
+          const target = Math.min(startDate.getDate(), daysInMonth(day.getFullYear(), day.getMonth()));
+          return day.getDate() === target && monthsBetween(startDay, day) % interval === 0;
+        }
+        case "Monthly (same day of the week)":
+          return day.getDay() === startDate.getDay() && Math.ceil(day.getDate() / 7) === Math.ceil(startDate.getDate() / 7) && monthsBetween(startDay, day) % interval === 0;
+        case "Yearly": {
+          const target = Math.min(startDate.getDate(), daysInMonth(day.getFullYear(), startDate.getMonth()));
+          return day.getMonth() === startDate.getMonth() && day.getDate() === target && (day.getFullYear() - startDate.getFullYear()) % interval === 0;
+        }
+        default:
+          return false;
+      }
+    };
+    const results = [];
+    while (cursor <= finalDay) {
+      if (matchesFrequency(cursor) && !skipSet.has(toDateKey(cursor))) {
+        results.push({
+          start: combineDateAndTime(cursor, startDate.getHours(), startDate.getMinutes()),
+          end: combineDateAndTime(addDays(cursor, endDayOffset), endHours, endMinutes)
+        });
+      }
+      cursor = addDays(cursor, 1);
+    }
+    return results;
+  }
+  function parseEventFromJSON(raw) {
+    return {
+      id: raw.slug || raw.name,
+      name: raw.name || "",
+      slug: raw.slug || "",
+      startDate: parseDynamoDateTime(raw.startDateTime),
+      endDate: parseDynamoDateTime(raw.endDateTime),
+      recurringEndDate: parseDynamoDate(raw.recurringEndDate),
+      showStartTime: parseBool(raw.showStartTime),
+      showEndTime: parseBool(raw.showEndTime),
+      showEndDate: parseBool(raw.showEndDate),
+      eventType: raw.eventType || "",
+      shortDescription: raw.shortDescription || "",
+      location: raw.location || "",
+      address: raw.address || "",
+      timezone: raw.timezone || "",
+      recurringFrequency: raw.recurringFrequency && raw.recurringFrequency.trim() ? raw.recurringFrequency.trim() : "None",
+      recurringInterval: parseRecurringInterval(raw.recurringInterval),
+      recurringDays: parseCsv(raw.recurringDays),
+      recurringSkipDates: parseCsv(raw.recurringSkipDates)
+    };
+  }
+  function parseDynamoDateTime(str) {
+    if (!str) return null;
+    const s = str.trim();
+    if (!s) return null;
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})\s*(am|pm)$/i);
+    if (m) {
+      const [, y, mo, d, h, min, ampm] = m;
+      let hours = parseInt(h, 10);
+      if (ampm.toLowerCase() === "pm" && hours < 12) hours += 12;
+      if (ampm.toLowerCase() === "am" && hours === 12) hours = 0;
+      return new Date(+y, +mo - 1, +d, hours, +min);
+    }
+    const native = new Date(s);
+    return isNaN(native.getTime()) ? null : native;
+  }
+  var MONTH_NAMES = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December"
+  ];
+  function parseDynamoDate(str) {
+    if (!str) return null;
+    const s = str.trim();
+    if (!s) return null;
+    const m = s.match(/^([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})$/);
+    if (m) {
+      const [, monthName, d, y] = m;
+      const monthIndex = MONTH_NAMES.findIndex((name) => name.toLowerCase() === monthName.toLowerCase());
+      if (monthIndex !== -1) return new Date(+y, monthIndex, +d);
+    }
+    const native = new Date(s);
+    return isNaN(native.getTime()) ? null : native;
+  }
+  function parseRecurringInterval(raw) {
+    if (raw === void 0 || raw === null) return 1;
+    const trimmed = String(raw).trim();
+    if (trimmed === "" || trimmed === "-1") return 1;
+    const n = parseInt(trimmed, 10);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  }
+  function parseCsv(str) {
+    if (!str) return [];
+    return str.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  function parseBool(val) {
+    if (typeof val === "boolean") return val;
+    if (typeof val === "string") return val.trim().toLowerCase() === "true";
+    return false;
+  }
+  function startOfDay(date) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  }
+  function startOfWeek(date) {
+    const d = startOfDay(date);
+    d.setDate(d.getDate() - d.getDay());
+    return d;
+  }
+  function addDays(date, n) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate() + n);
+  }
+  function daysBetween(a, b) {
+    return Math.round((startOfDay(b) - startOfDay(a)) / 864e5);
+  }
+  function weeksBetween(a, b) {
+    return Math.round(daysBetween(a, b) / 7);
+  }
+  function monthsBetween(a, b) {
+    return (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth());
+  }
+  function daysInMonth(year, monthIndex) {
+    return new Date(year, monthIndex + 1, 0).getDate();
+  }
+  function combineDateAndTime(day, hours, minutes) {
+    return new Date(day.getFullYear(), day.getMonth(), day.getDate(), hours, minutes);
+  }
+  function toDateKey(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, "0");
+    const d = String(date.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  }
+
+  // src/event-data.js
+  var DATA_WRAP = '[data-ix-events="data-wrap"]';
+  var ITEM = '[data-ix-events="item"]';
+  var DATA_EL = '[data-ix-events="data"]';
+  var MAX_ATTEMPTS = 20;
+  var RETRY_DELAY = 300;
+  function whenEvents(callback) {
+    let attempts = 0;
+    const tryLoad = () => {
+      const dataWraps = document.querySelectorAll(DATA_WRAP);
+      if (dataWraps.length > 1) {
+        console.warn(
+          `events: found ${dataWraps.length} elements matching ${DATA_WRAP} \u2014 using the first one. Remove the extras to avoid duplicate or conflicting event data.`
+        );
+      }
+      const dataWrap = dataWraps[0];
+      const items = dataWrap ? [...dataWrap.querySelectorAll(ITEM)] : [];
+      if (items.length === 0) {
+        attempts++;
+        if (attempts < MAX_ATTEMPTS) {
+          setTimeout(tryLoad, RETRY_DELAY);
+          return;
+        }
+        callback([]);
+        return;
+      }
+      const events = items.map((item) => {
+        const dataEl = item.querySelector(DATA_EL);
+        if (!dataEl) return null;
+        try {
+          const event = parseEventFromJSON(JSON.parse(dataEl.textContent));
+          return event.startDate ? event : null;
+        } catch (e) {
+          console.warn("events: could not parse event JSON", item, e);
+          return null;
+        }
+      }).filter(Boolean);
+      callback(events);
+    };
+    tryLoad();
+  }
+
+  // src/event-list.js
+  var ANIMATION_ID = "events";
+  var LAYOUT = "list";
+  var WRAP = '[data-ix-events="wrap"]';
+  var PREV_BTN = '[data-ix-events="prev"]';
+  var NEXT_BTN = '[data-ix-events="next"]';
+  var TODAY_BTN = '[data-ix-events="today"]';
+  var LABEL = '[data-ix-events="label"]';
+  var ITEM2 = '[data-ix-events="item"]';
+  var DATA_EL2 = '[data-ix-events="data"]';
+  var CARD_EL = '[data-ix-events="card"]';
+  var DATE_EL = '[data-ix-events="date"]';
+  var SLUG_ATTR = "data-ix-events-slug";
+  var CLONE_ATTR = "data-ix-events-clone";
+  var DOW_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  var DOW_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  var MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  var MONTH_FULL = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December"
+  ];
+  var eventList = function() {
+    const wraps = [...document.querySelectorAll(WRAP)].filter(
+      (wrap) => wrap.getAttribute("data-ix-events-layout") === LAYOUT
+    );
+    console.log('[event-list] DEBUG wraps with layout="list" found:', wraps.length, wraps);
+    if (wraps.length === 0) return;
+    whenEvents((events) => {
+      console.log("[event-list] DEBUG whenEvents callback fired, events received:", events.length, events);
+      const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
+      const configs = wraps.map((wrap) => buildListConfig(wrap, eventsBySlug)).filter(Boolean);
+      console.log("[event-list] DEBUG configs built:", configs.length, configs);
+      if (configs.length === 0) return;
+      window.FinsweetAttributes ||= [];
+      window.FinsweetAttributes.push([
+        "list",
+        (listInstances) => {
+          console.log("[event-list] DEBUG Finsweet list callback fired, listInstances found:", listInstances.length, listInstances);
+          configs.forEach((config) => {
+            const listInstance = listInstances.find((l) => l.listElement === config.list);
+            console.log("[event-list] DEBUG matching Finsweet instance for config.list:", config.list, "-> found:", !!listInstance);
+            if (!listInstance) {
+              console.warn(
+                'event-list: no Finsweet List instance found for this Collection List \u2014 add fs-list-element="list" to it.',
+                config.list
+              );
+              return;
+            }
+            initList(config, listInstance);
+          });
+        }
+      ]);
+    });
+  };
+  function buildListConfig(wrap, eventsBySlug) {
+    const duplicateRecurring = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-duplicate-recurring`));
+    let range = attr("month", wrap.getAttribute(`data-ix-${ANIMATION_ID}-range`));
+    if (range !== "month" && range !== "week") range = "month";
+    const weekStartDay = attr("sunday", wrap.getAttribute(`data-ix-${ANIMATION_ID}-week-start`)) === "monday" ? 1 : 0;
+    const label = wrap.querySelector(LABEL);
+    const prevBtn = wrap.querySelector(PREV_BTN);
+    const nextBtn = wrap.querySelector(NEXT_BTN);
+    const todayBtn = wrap.querySelector(TODAY_BTN);
+    console.log("[event-list] DEBUG buildListConfig: duplicateRecurring =", duplicateRecurring, "| range =", range, "| weekStartDay =", weekStartDay, "| label found:", !!label, "| prevBtn found:", !!prevBtn, "| nextBtn found:", !!nextBtn, "| todayBtn found:", !!todayBtn);
+    const cardItems = [...wrap.querySelectorAll(ITEM2)].filter((item) => item.querySelector(CARD_EL));
+    console.log("[event-list] DEBUG buildListConfig: items with a card descendant found in wrap:", cardItems.length, cardItems);
+    if (cardItems.length === 0) return null;
+    const entries = cardItems.map((item) => {
+      const dataEl = item.querySelector(DATA_EL2);
+      let event;
+      if (dataEl) {
+        try {
+          event = parseEventFromJSON(JSON.parse(dataEl.textContent));
+        } catch (e) {
+          console.warn("event-list: could not parse event JSON", item, e);
+          return null;
+        }
+      } else {
+        const slug = item.getAttribute(SLUG_ATTR);
+        event = slug ? eventsBySlug.get(slug) : null;
+        if (!event) {
+          console.warn(
+            `event-list: no matching event data for slug "${slug}" \u2014 bind ${SLUG_ATTR} on this card to the Slug field.`,
+            item
+          );
+          return null;
+        }
+      }
+      return event.startDate ? { item, event } : null;
+    }).filter(Boolean);
+    console.log("[event-list] DEBUG buildListConfig: successfully paired entries:", entries.length, entries);
+    if (entries.length === 0) return null;
+    const list = entries[0].item.parentElement;
+    console.log("[event-list] DEBUG buildListConfig: resolved `list` container element:", list);
+    return { duplicateRecurring, range, weekStartDay, label, prevBtn, nextBtn, todayBtn, entries, list };
+  }
+  function initList(config, listInstance) {
+    const { duplicateRecurring, range, weekStartDay, label, prevBtn, nextBtn, todayBtn, entries, list } = config;
+    const eventByElement = new Map(entries.map(({ item, event }) => [item, event]));
+    console.log("[event-list] DEBUG initList: registering hook, listInstance =", listInstance);
+    let current = anchorFor(/* @__PURE__ */ new Date(), range, weekStartDay);
+    listInstance.addHook("filter", (items) => {
+      const { start: rangeStart, end: rangeEnd } = getRangeBounds(current, range);
+      console.log("[event-list] DEBUG filter hook FIRED. items received from Finsweet:", items.length, items, "| active range:", rangeStart, "-", rangeEnd);
+      const removedClones = list.querySelectorAll(`[${CLONE_ATTR}]`);
+      console.log("[event-list] DEBUG removing stale clones from previous pass:", removedClones.length);
+      removedClones.forEach((el) => el.remove());
+      const result = [];
+      items.forEach((listItem) => {
+        const event = eventByElement.get(listItem.element);
+        if (!event) {
+          console.log("[event-list] DEBUG no matching event for this listItem.element (stale/unrecognized) \u2014 dropping:", listItem.element);
+          return;
+        }
+        const occurrences = getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
+        console.log("[event-list] DEBUG event", event.name, "-> occurrences in range:", occurrences.length);
+        if (occurrences.length === 0) return;
+        const [first, ...rest] = occurrences;
+        setDateFields(listItem.element, first, event);
+        result.push({ listItem, date: first.start, showStartTime: event.showStartTime });
+        if (duplicateRecurring) {
+          let insertAfter = listItem.element;
+          rest.forEach((occ, i) => {
+            const clone = listItem.element.cloneNode(true);
+            clone.setAttribute(CLONE_ATTR, "");
+            uniquifyIds(clone, `occ-${i + 1}`);
+            setDateFields(clone, occ, event);
+            insertAfter.insertAdjacentElement("afterend", clone);
+            insertAfter = clone;
+            result.push({ listItem: listInstance.createItem(clone), date: occ.start, showStartTime: event.showStartTime });
+          });
+        }
+      });
+      result.sort(compareListEntries);
+      console.log("[event-list] DEBUG filter hook RETURNING", result.length, "items to Finsweet");
+      return result.map((r) => r.listItem);
+    });
+    const refresh = () => {
+      console.log("[event-list] DEBUG refresh() called \u2014 range now:", current);
+      if (label) {
+        const format = label.getAttribute("data-ix-events-label-format");
+        label.textContent = range === "week" ? formatWeekLabel(current, format) : formatOccurrenceDate(current, format || "MMMM YYYY");
+      }
+      listInstance.triggerHook("filter");
+    };
+    refresh();
+    prevBtn?.addEventListener("click", () => {
+      current = stepCurrent(current, range, -1);
+      refresh();
+    });
+    nextBtn?.addEventListener("click", () => {
+      current = stepCurrent(current, range, 1);
+      refresh();
+    });
+    todayBtn?.addEventListener("click", () => {
+      current = anchorFor(/* @__PURE__ */ new Date(), range, weekStartDay);
+      refresh();
+    });
+  }
+  function compareListEntries(a, b) {
+    const dayDiff = startOfDay2(a.date) - startOfDay2(b.date);
+    if (dayDiff !== 0) return dayDiff;
+    if (a.showStartTime !== b.showStartTime) return a.showStartTime ? -1 : 1;
+    return a.date - b.date;
+  }
+  function startOfDay2(date) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+  }
+  function addDays2(date, n) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate() + n);
+  }
+  function startOfWeek2(date, weekStartDay) {
+    const diff = (date.getDay() - weekStartDay + 7) % 7;
+    return addDays2(date, -diff);
+  }
+  function anchorFor(date, range, weekStartDay) {
+    return range === "week" ? startOfWeek2(date, weekStartDay) : new Date(date.getFullYear(), date.getMonth(), 1);
+  }
+  function getRangeBounds(current, range) {
+    if (range === "week") {
+      const weekEnd = addDays2(current, 6);
+      return { start: current, end: new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate(), 23, 59, 59) };
+    }
+    return {
+      start: current,
+      end: new Date(current.getFullYear(), current.getMonth() + 1, 0, 23, 59, 59)
+    };
+  }
+  function stepCurrent(current, range, direction) {
+    if (range === "week") return addDays2(current, 7 * direction);
+    const next = new Date(current.getFullYear(), current.getMonth(), 1);
+    next.setMonth(next.getMonth() + direction);
+    return next;
+  }
+  function setDateFields(root, occurrence, event) {
+    root.querySelectorAll(DATE_EL).forEach((el) => {
+      const format = el.getAttribute("data-ix-events-date-format") || "MMMM D, YYYY";
+      el.textContent = isFullDateFormat(format) ? formatFullDate(occurrence, event) : formatOccurrenceDate(occurrence.start, format);
+    });
+  }
+  var pad2 = (n) => String(n).padStart(2, "0");
+  var ordinal = (n) => {
+    if (n % 10 === 1 && n % 100 !== 11) return `${n}st`;
+    if (n % 10 === 2 && n % 100 !== 12) return `${n}nd`;
+    if (n % 10 === 3 && n % 100 !== 13) return `${n}rd`;
+    return `${n}th`;
+  };
+  var DATE_FORMAT_TOKEN = /YYYY|YY|MMMM|MMM|MM|M|DD|Do|D|dddd|ddd|mm|H|h|A|a/g;
+  function formatOccurrenceDate(date, format) {
+    const hours = date.getHours();
+    const tokens = {
+      YYYY: () => String(date.getFullYear()),
+      YY: () => String(date.getFullYear()).slice(-2),
+      MMMM: () => MONTH_FULL[date.getMonth()],
+      MMM: () => MONTH_SHORT[date.getMonth()],
+      MM: () => pad2(date.getMonth() + 1),
+      M: () => String(date.getMonth() + 1),
+      DD: () => pad2(date.getDate()),
+      Do: () => ordinal(date.getDate()),
+      D: () => String(date.getDate()),
+      dddd: () => DOW_FULL[date.getDay()],
+      ddd: () => DOW_SHORT[date.getDay()],
+      mm: () => pad2(date.getMinutes()),
+      H: () => String(hours),
+      h: () => String(hours % 12 || 12),
+      A: () => hours >= 12 ? "PM" : "AM",
+      a: () => hours >= 12 ? "pm" : "am"
+    };
+    return format.replace(DATE_FORMAT_TOKEN, (match) => tokens[match]());
+  }
+  function formatWeekLabel(current, format) {
+    const end = addDays2(current, 6);
+    if (format) {
+      return `${formatOccurrenceDate(current, format)} - ${formatOccurrenceDate(end, format)}`;
+    }
+    const crossesYear = current.getFullYear() !== end.getFullYear();
+    const startFormat = crossesYear ? "MMM D, YYYY" : "MMM D";
+    return `${formatOccurrenceDate(current, startFormat)} - ${formatOccurrenceDate(end, "MMM D, YYYY")}`;
+  }
+  function isFullDateFormat(format) {
+    return format.trim().toUpperCase() === "FULLDATE";
+  }
+  function formatFullDate(occurrence, event) {
+    const { start, end } = occurrence;
+    const { showStartTime, showEndTime, showEndDate } = event;
+    const isMultiDay = showEndDate && startOfDay2(end) !== startOfDay2(start);
+    const datePart = isMultiDay ? formatDateRange(start, end) : formatSingleDate(start);
+    if (!showStartTime) return datePart;
+    if (!showEndTime) return `${datePart} at ${formatClockTime(start)}`;
+    const startTime = formatClockTime(start);
+    const endTime = formatClockTime(end);
+    const startPeriod = start.getHours() >= 12 ? "pm" : "am";
+    const endPeriod = end.getHours() >= 12 ? "pm" : "am";
+    const start12Hour = start.getHours() % 12 || 12;
+    const hideStartPeriod = startPeriod === endPeriod && start12Hour !== 12;
+    const startTimeText = hideStartPeriod ? startTime.slice(0, -2) : startTime;
+    return `${datePart}, ${startTimeText}-${endTime}`;
+  }
+  function formatSingleDate(date) {
+    return `${MONTH_FULL[date.getMonth()]} ${ordinal(date.getDate())}`;
+  }
+  function formatDateRange(start, end) {
+    const sameMonth = start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear();
+    if (sameMonth) return `${MONTH_FULL[start.getMonth()]} ${start.getDate()}-${ordinal(end.getDate())}`;
+    return `${formatSingleDate(start)} - ${formatSingleDate(end)}`;
+  }
+  function formatClockTime(date) {
+    const hours = date.getHours();
+    const minutes = date.getMinutes();
+    const h12 = hours % 12 || 12;
+    const period = hours >= 12 ? "pm" : "am";
+    const minuteText = minutes === 0 ? "" : `:${pad2(minutes)}`;
+    return `${h12}${minuteText}${period}`;
+  }
+  function uniquifyIds(root, suffix) {
+    if (root.hasAttribute("id")) root.id = `${root.id}-${suffix}`;
+    root.removeAttribute("data-w-id");
+    root.querySelectorAll("[id]").forEach((el) => {
+      el.id = `${el.id}-${suffix}`;
+    });
+    root.querySelectorAll("[data-w-id]").forEach((el) => {
+      el.removeAttribute("data-w-id");
+    });
+  }
+
+  // src/calendar.js
+  var ANIMATION_ID2 = "events";
+  var LAYOUT2 = "calendar";
+  var WRAP2 = '[data-ix-events="wrap"]';
+  var MONTH_FULL2 = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December"
+  ];
+  var DOW_SHORT2 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  var EVENT_COLOR_VARS = [
+    ["--_theme---text--text-accent", "#2563eb"],
+    ["--_theme---border--border-secondary", "#6b7280"],
+    ["--_theme---text--text-primary", "#1f2937"]
+  ];
+  var stylesInjected = false;
+  var calendar = function() {
+    const wraps = [...document.querySelectorAll(WRAP2)].filter(
+      (wrap) => wrap.getAttribute("data-ix-events-layout") === LAYOUT2
+    );
+    if (wraps.length === 0) return;
+    injectStyles();
+    wraps.forEach((wrap) => initCalendar(wrap));
+  };
+  function initCalendar(wrap) {
+    const monthRange = attr(6, wrap.getAttribute(`data-ix-${ANIMATION_ID2}-months`));
+    const today = /* @__PURE__ */ new Date();
+    const state = { year: today.getFullYear(), month: today.getMonth(), events: [], loading: true };
+    wrap.classList.add("ix-calendar");
+    wrap.style.position = "relative";
+    wrap.innerHTML = "";
+    const header = buildHeader();
+    const grid = buildGrid();
+    const loadingEl = buildLoadingOverlay();
+    const tooltip = buildTooltip();
+    wrap.append(header.el, grid.weekdayRow, grid.gridEl, loadingEl, tooltip.el);
+    const minMonth = new Date(today.getFullYear(), today.getMonth() - monthRange, 1);
+    const maxMonth = new Date(today.getFullYear(), today.getMonth() + monthRange, 1);
+    const canGoPrev = () => new Date(state.year, state.month - 1, 1) >= minMonth;
+    const canGoNext = () => new Date(state.year, state.month + 1, 1) <= maxMonth;
+    header.prevBtn.addEventListener("click", () => {
+      if (!canGoPrev()) return;
+      shiftMonth(-1);
+      render();
+    });
+    header.nextBtn.addEventListener("click", () => {
+      if (!canGoNext()) return;
+      shiftMonth(1);
+      render();
+    });
+    function shiftMonth(delta) {
+      const d = new Date(state.year, state.month + delta, 1);
+      state.year = d.getFullYear();
+      state.month = d.getMonth();
+    }
+    function render() {
+      header.label.textContent = `${MONTH_FULL2[state.month]} ${state.year}`;
+      header.prevBtn.disabled = !canGoPrev();
+      header.nextBtn.disabled = !canGoNext();
+      const rangeStart = new Date(state.year, state.month - 1, 1);
+      const rangeEnd = new Date(state.year, state.month + 2, 0, 23, 59, 59);
+      const occurrences = [];
+      state.events.forEach((event) => {
+        getOccurrences(event, rangeStart, rangeEnd).forEach((occ) => {
+          occurrences.push({ event, start: occ.start, end: occ.end });
+        });
+      });
+      renderGrid(grid, state.year, state.month, occurrences, today, tooltip, wrap);
+    }
+    render();
+    whenEvents((events) => {
+      const usedDemo = events.length === 0;
+      state.events = usedDemo ? demoEvents() : events;
+      state.loading = false;
+      loadingEl.style.display = "none";
+      if (usedDemo) {
+        const note = document.createElement("p");
+        note.className = "ix-calendar_demo-note";
+        note.textContent = "No events data-wrap found on this page \u2014 showing sample data.";
+        wrap.append(note);
+      }
+      render();
+    });
+  }
+  function buildHeader() {
+    const el = document.createElement("div");
+    el.className = "ix-calendar_header";
+    const prevBtn = document.createElement("button");
+    prevBtn.type = "button";
+    prevBtn.className = "ix-calendar_nav-btn";
+    prevBtn.setAttribute("aria-label", "Previous month");
+    prevBtn.innerHTML = arrowSvg("M15 18l-6-6 6-6");
+    const label = document.createElement("h2");
+    label.className = "ix-calendar_label";
+    const nextBtn = document.createElement("button");
+    nextBtn.type = "button";
+    nextBtn.className = "ix-calendar_nav-btn";
+    nextBtn.setAttribute("aria-label", "Next month");
+    nextBtn.innerHTML = arrowSvg("M9 18l6-6-6-6");
+    el.append(prevBtn, label, nextBtn);
+    return { el, prevBtn, label, nextBtn };
+  }
+  function arrowSvg(path) {
+    return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${path}"/></svg>`;
+  }
+  function buildGrid() {
+    const weekdayRow = document.createElement("div");
+    weekdayRow.className = "ix-calendar_weekdays";
+    DOW_SHORT2.forEach((d) => {
+      const cell = document.createElement("div");
+      cell.className = "ix-calendar_weekday";
+      cell.textContent = d;
+      weekdayRow.append(cell);
+    });
+    const gridEl = document.createElement("div");
+    gridEl.className = "ix-calendar_grid";
+    return { weekdayRow, gridEl };
+  }
+  function buildLoadingOverlay() {
+    const el = document.createElement("div");
+    el.className = "ix-calendar_loading";
+    el.textContent = "Loading events\u2026";
+    return el;
+  }
+  function buildTooltip() {
+    const el = document.createElement("div");
+    el.className = "ix-calendar_tooltip";
+    el.style.display = "none";
+    return { el };
+  }
+  function renderGrid(grid, year, month, occurrences, today, tooltip, wrap) {
+    grid.gridEl.innerHTML = "";
+    const firstWeekday = new Date(year, month, 1).getDay();
+    const daysInThisMonth = daysInMonth2(year, month);
+    const prevMonthDays = daysInMonth2(month === 0 ? year - 1 : year, month === 0 ? 11 : month - 1);
+    const cells = [];
+    for (let i = firstWeekday - 1; i >= 0; i--) {
+      const d = prevMonthDays - i;
+      cells.push({
+        date: new Date(month === 0 ? year - 1 : year, month === 0 ? 11 : month - 1, d),
+        inMonth: false
+      });
+    }
+    for (let d = 1; d <= daysInThisMonth; d++) {
+      cells.push({ date: new Date(year, month, d), inMonth: true });
+    }
+    while (cells.length < 42) {
+      const last = cells[cells.length - 1].date;
+      cells.push({ date: addDays3(last, 1), inMonth: false });
+    }
+    cells.forEach((cell, i) => {
+      const dayEl = document.createElement("div");
+      dayEl.className = "ix-calendar_day";
+      if (!cell.inMonth) dayEl.classList.add("is-outside");
+      if ((i + 1) % 7 === 0) dayEl.classList.add("is-last-col");
+      const isToday = cell.inMonth && isSameDay(cell.date, today);
+      const numberEl = document.createElement("div");
+      numberEl.className = "ix-calendar_day-number-row";
+      const numberBadge = document.createElement("span");
+      numberBadge.className = "ix-calendar_day-number" + (isToday ? " is-today" : "");
+      numberBadge.textContent = String(cell.date.getDate());
+      numberEl.append(numberBadge);
+      dayEl.append(numberEl);
+      if (cell.inMonth) {
+        const dayOccurrences = occurrences.filter((o) => dayInRange(cell.date, o.start, o.end));
+        const eventsEl = document.createElement("div");
+        eventsEl.className = "ix-calendar_day-events";
+        dayOccurrences.slice(0, 2).forEach((occ) => {
+          eventsEl.append(buildEventPill(occ, cell.date, occurrences, tooltip, wrap));
+        });
+        if (dayOccurrences.length > 2) {
+          const more = document.createElement("span");
+          more.className = "ix-calendar_more";
+          more.textContent = `+${dayOccurrences.length - 2} more`;
+          eventsEl.append(more);
+        }
+        dayEl.append(eventsEl);
+      }
+      grid.gridEl.append(dayEl);
+    });
+  }
+  function buildEventPill(occ, cellDate, allOccurrences, tooltip, wrap) {
+    const isStart = isSameDay(cellDate, occ.start);
+    const isEnd = isSameDay(cellDate, occ.end);
+    const pos = isStart && isEnd ? "single" : isStart ? "start" : isEnd ? "end" : "middle";
+    const color = EVENT_COLOR_VARS[simpleHash(occ.event.id) % EVENT_COLOR_VARS.length];
+    const pill = document.createElement("a");
+    pill.className = `ix-calendar_pill is-${pos}`;
+    pill.href = `/event/${occ.event.slug}`;
+    pill.style.setProperty("--pill-color", `var(${color[0]}, ${color[1]})`);
+    pill.textContent = pos === "single" || pos === "start" ? occ.event.name : "\xA0";
+    pill.addEventListener("mouseenter", () => showTooltip(tooltip, occ, pill, wrap));
+    pill.addEventListener("mouseleave", () => hideTooltip(tooltip));
+    return pill;
+  }
+  function showTooltip(tooltip, occ, targetEl, wrap) {
+    const { event, start, end } = occ;
+    const wrapRect = wrap.getBoundingClientRect();
+    const targetRect = targetEl.getBoundingClientRect();
+    let dateText = start.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    if (!isSameDay(start, end))
+      dateText += ` \u2013 ${end.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+    if (event.showStartTime) dateText += ` \xB7 ${formatTime(start)}`;
+    if (event.showEndTime && !isSameDay(start, end)) dateText += ` \u2013 ${formatTime(end)}`;
+    else if (event.showEndTime && event.showStartTime && end.getTime() !== start.getTime())
+      dateText += ` \u2013 ${formatTime(end)}`;
+    tooltip.el.innerHTML = `
+    <h3 class="ix-calendar_tooltip-title">${escapeHtml(event.name)}</h3>
+    <div class="ix-calendar_tooltip-meta">${escapeHtml(dateText)}</div>
+    ${event.location ? `<div class="ix-calendar_tooltip-meta">${escapeHtml(event.location)}</div>` : ""}
+    ${event.shortDescription ? `<p class="ix-calendar_tooltip-desc">${escapeHtml(event.shortDescription)}</p>` : ""}
+  `;
+    const tooltipWidth = 256;
+    const rawX = targetRect.left - wrapRect.left + targetRect.width / 2;
+    const clampedX = Math.max(tooltipWidth / 2, Math.min(rawX, wrapRect.width - tooltipWidth / 2));
+    tooltip.el.style.left = `${clampedX}px`;
+    tooltip.el.style.top = `${targetRect.top - wrapRect.top}px`;
+    tooltip.el.style.display = "block";
+  }
+  function hideTooltip(tooltip) {
+    tooltip.el.style.display = "none";
+  }
+  function demoEvents() {
+    const today = /* @__PURE__ */ new Date();
+    const y = today.getFullYear();
+    const m = today.getMonth();
+    return [
+      {
+        id: "demo-1",
+        name: "Community Meetup",
+        slug: "community-meetup",
+        startDate: new Date(y, m, 8, 18, 0),
+        endDate: new Date(y, m, 8, 20, 0),
+        showStartTime: true,
+        showEndTime: true,
+        showEndDate: false,
+        shortDescription: "Join us for our monthly community gathering.",
+        location: "Community Center",
+        timezone: "",
+        recurringFrequency: "None",
+        recurringInterval: 1,
+        recurringDays: [],
+        recurringSkipDates: []
+      },
+      {
+        id: "demo-2",
+        name: "Volunteer Week",
+        slug: "volunteer-week",
+        startDate: new Date(y, m, 20, 9, 0),
+        endDate: new Date(y, m, 24, 17, 0),
+        showStartTime: false,
+        showEndTime: false,
+        showEndDate: true,
+        shortDescription: "A full week of volunteer opportunities.",
+        location: "Various Locations",
+        timezone: "",
+        recurringFrequency: "None",
+        recurringInterval: 1,
+        recurringDays: [],
+        recurringSkipDates: []
+      },
+      {
+        id: "demo-3",
+        name: "Small Group",
+        slug: "small-group",
+        startDate: new Date(y, m, 3, 18, 0),
+        endDate: new Date(y, m, 3, 19, 30),
+        showStartTime: true,
+        showEndTime: true,
+        showEndDate: false,
+        shortDescription: "Biweekly small group discussion.",
+        location: "Room 204",
+        timezone: "",
+        recurringFrequency: "Weekly",
+        recurringInterval: 2,
+        recurringDays: [],
+        recurringSkipDates: []
+      }
+    ];
+  }
+  function daysInMonth2(year, monthIndex) {
+    return new Date(year, monthIndex + 1, 0).getDate();
+  }
+  function addDays3(date, n) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate() + n);
+  }
+  function startOfDay3(date) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  }
+  function isSameDay(a, b) {
+    return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  }
+  function dayInRange(day, start, end) {
+    const d = startOfDay3(day);
+    return d >= startOfDay3(start) && d <= startOfDay3(end);
+  }
+  function formatTime(date) {
+    let h = date.getHours();
+    const m = date.getMinutes();
+    const ampm = h >= 12 ? "PM" : "AM";
+    h = h % 12 || 12;
+    return m === 0 ? `${h} ${ampm}` : `${h}:${String(m).padStart(2, "0")} ${ampm}`;
+  }
+  function simpleHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) hash = hash * 31 + str.charCodeAt(i) >>> 0;
+    return hash;
+  }
+  function escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+  }
+  function injectStyles() {
+    if (stylesInjected) return;
+    stylesInjected = true;
+    const style = document.createElement("style");
+    style.textContent = `
 .ix-calendar {
   font-family: inherit;
   color: var(--_theme---text--text-primary, #1f2937);
@@ -179,4 +1032,13 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-`,document.head.append(e)}document.addEventListener("DOMContentLoaded",function(){se(),me()});})();
+`;
+    document.head.append(style);
+  }
+
+  // src/index.js
+  document.addEventListener("DOMContentLoaded", function() {
+    eventList();
+    calendar();
+  });
+})();
