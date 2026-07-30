@@ -141,7 +141,12 @@ import { whenEvents } from './event-data';
 //                                        One is inserted automatically
 //                                        before the very first card in the
 //                                        feed, and again at every month
-//                                        boundary after that.
+//                                        boundary after that. If the card
+//                                        container is a CSS grid, each
+//                                        divider gets grid-column: 1 / -1 so
+//                                        it spans every column as a
+//                                        full-width row instead of sitting
+//                                        in one cell — a no-op otherwise.
 //       [data-ix-events="feed-divider-text"]  child of the divider above,
 //                                        text updated per instance.
 //         data-ix-events-date-format="{format}"  same token vocabulary as
@@ -434,6 +439,12 @@ function initFeed(wrap, eventsBySlug) {
     // !important, so an inline style override can't win against it) — remove
     // it outright on each clone instead of trying to out-specificity it.
     divider.classList.remove('u-hide');
+    // If the feed container is a CSS grid (e.g. Lumos's multi-column grid
+    // utility), span every column so the divider reads as a full-width row
+    // instead of sitting in a single cell — works regardless of how many
+    // columns are configured at the current breakpoint. A harmless no-op if
+    // the container isn't a grid at all (single-column / flex feeds).
+    divider.style.gridColumn = '1 / -1';
     const textEl = divider.querySelector(FEED_DIVIDER_TEXT_EL);
     if (textEl) textEl.textContent = text;
     return divider;
