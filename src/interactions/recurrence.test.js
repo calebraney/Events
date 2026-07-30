@@ -1,16 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { getOccurrences, parseEventFromJSON, parseDynamoDateTime } from './recurrence.js';
+import { getOccurrences, parseEventFromJSON, parseDynamoDateTime, parseDynamoDate } from './recurrence.js';
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const addDays = (date, n) => new Date(date.getFullYear(), date.getMonth(), date.getDate() + n, date.getHours(), date.getMinutes());
 const dateKey = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const startOfDayLocal = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate());
 
 test('Daily, interval 1 — one occurrence per day', () => {
   const anchor = new Date(2026, 0, 1, 9, 0);
   const event = {
     startDate: anchor,
-    endDate: new Date(2026, 0, 1, 10, 0),
+    endDate: null, // indefinite — no series cutoff
     recurringFrequency: 'Daily',
     recurringInterval: 1,
     recurringDays: [],
@@ -21,7 +22,6 @@ test('Daily, interval 1 — one occurrence per day', () => {
   occ.forEach((o, i) => {
     assert.equal(dateKey(o.start), dateKey(addDays(anchor, i)));
     assert.equal(o.start.getHours(), 9);
-    assert.equal(o.end.getHours(), 10);
   });
 });
 
@@ -29,7 +29,7 @@ test('Daily, interval 2 — every other day', () => {
   const anchor = new Date(2026, 0, 1, 9, 0);
   const event = {
     startDate: anchor,
-    endDate: new Date(2026, 0, 1, 10, 0),
+    endDate: null,
     recurringFrequency: 'Daily',
     recurringInterval: 2,
     recurringDays: [],
@@ -47,7 +47,7 @@ test('Weekly, single day (no Recurring Days set) — defaults to Start Date week
   const anchor = new Date(2026, 0, 6, 18, 0);
   const event = {
     startDate: anchor,
-    endDate: new Date(2026, 0, 6, 20, 0),
+    endDate: null,
     recurringFrequency: 'Weekly',
     recurringInterval: 1,
     recurringDays: [],
@@ -66,7 +66,7 @@ test('Weekly, multi-day (Recurring Days = two weekdays) — the Tue/Thu case', (
   const otherDow = (anchor.getDay() + 2) % 7;
   const event = {
     startDate: anchor,
-    endDate: new Date(2026, 0, 6, 20, 0),
+    endDate: null,
     recurringFrequency: 'Weekly',
     recurringInterval: 1,
     recurringDays: [DOW[anchor.getDay()], DOW[otherDow]],
@@ -82,7 +82,7 @@ test('Weekly, interval 2 — biweekly', () => {
   const anchor = new Date(2026, 0, 6, 18, 0);
   const event = {
     startDate: anchor,
-    endDate: new Date(2026, 0, 6, 20, 0),
+    endDate: null,
     recurringFrequency: 'Weekly',
     recurringInterval: 2,
     recurringDays: [],
@@ -100,7 +100,7 @@ test('Monthly (same date) — clamps to end of short months', () => {
   const anchor = new Date(2026, 0, 31, 9, 0); // Jan 31, 2026 (2026 is not a leap year)
   const event = {
     startDate: anchor,
-    endDate: new Date(2026, 0, 31, 10, 0),
+    endDate: null,
     recurringFrequency: 'Monthly (same date)',
     recurringInterval: 1,
     recurringDays: [],
@@ -118,7 +118,7 @@ test('Monthly (same day of the week) — skips a month where the 5th occurrence 
   assert.equal(Math.ceil(anchor.getDate() / 7), 5);
   const event = {
     startDate: anchor,
-    endDate: new Date(2026, 0, 30, 10, 0),
+    endDate: null,
     recurringFrequency: 'Monthly (same day of the week)',
     recurringInterval: 1,
     recurringDays: [],
@@ -135,7 +135,7 @@ test('Yearly — clamps Feb 29 to Feb 28 in a non-leap year', () => {
   const anchor = new Date(2024, 1, 29, 9, 0); // Feb 29, 2024 (leap year)
   const event = {
     startDate: anchor,
-    endDate: new Date(2024, 1, 29, 10, 0),
+    endDate: null,
     recurringFrequency: 'Yearly',
     recurringInterval: 1,
     recurringDays: [],
@@ -150,7 +150,7 @@ test('Recurring Skip Dates are actually excluded', () => {
   const anchor = new Date(2026, 0, 1, 9, 0);
   const event = {
     startDate: anchor,
-    endDate: new Date(2026, 0, 1, 10, 0),
+    endDate: null,
     recurringFrequency: 'Daily',
     recurringInterval: 1,
     recurringDays: [],
@@ -161,11 +161,12 @@ test('Recurring Skip Dates are actually excluded', () => {
   assert.ok(!occ.some((o) => dateKey(o.start) === '2026-01-03'));
 });
 
-test('End Date/Time as series cutoff — stops recurring after that date, keeps its time as each occurrence\'s end time', () => {
+test('Recurring End Date caps the series, independent of End Date/Time', () => {
   const anchor = new Date(2026, 0, 1, 9, 0);
   const event = {
     startDate: anchor,
-    endDate: new Date(2026, 0, 10, 17, 0), // series ends Jan 10; every occurrence ends 5pm
+    endDate: new Date(2026, 0, 1, 17, 0), // every occurrence ends 5pm, same day
+    recurringEndDate: new Date(2026, 0, 10), // series stops after Jan 10
     recurringFrequency: 'Daily',
     recurringInterval: 1,
     recurringDays: [],
@@ -176,7 +177,94 @@ test('End Date/Time as series cutoff — stops recurring after that date, keeps 
   assert.equal(dateKey(occ[occ.length - 1].start), '2026-01-10');
   occ.forEach((o) => {
     assert.equal(o.end.getHours(), 17);
-    assert.equal(dateKey(o.end), dateKey(o.start)); // same-day end, not the far-future series end date
+    assert.equal(dateKey(o.end), dateKey(o.start));
+  });
+});
+
+test('Recurring End Date set to the SAME day as Start Date still caps the series to one occurrence', () => {
+  // Regression test: an earlier version used End Date/Time itself as the series
+  // cutoff, so a same-day End Date was ambiguous with "just today's end time."
+  // Recurring End Date is now a dedicated, date-only field — if it's set at all,
+  // even to the same calendar day as Start Date, the series stops there. A
+  // truly indefinite recurring event must leave Recurring End Date empty.
+  const anchor = new Date(2026, 7, 4, 19, 0); // Aug 4, 2026, 7:00 PM
+  const event = {
+    startDate: anchor,
+    endDate: new Date(2026, 7, 4, 20, 30), // same day, 8:30 PM
+    recurringEndDate: new Date(2026, 7, 4), // same calendar day as Start Date
+    recurringFrequency: 'Weekly',
+    recurringInterval: 1,
+    recurringDays: ['Tue', 'Thu'],
+    recurringSkipDates: [],
+  };
+  const occ = getOccurrences(event, anchor, new Date(2026, 8, 30)); // through end of September
+  assert.equal(occ.length, 1);
+  assert.equal(dateKey(occ[0].start), '2026-08-04');
+  assert.equal(occ[0].end.getHours(), 20);
+  assert.equal(occ[0].end.getMinutes(), 30);
+});
+
+test('Multi-day recurring event — End Date one day after Start Date offsets every occurrence\'s end by that many days', () => {
+  // e.g. an event that runs Saturday through Sunday, recurring monthly on the same weekday
+  const anchor = new Date(2026, 0, 3, 9, 0); // Saturday Jan 3, 2026, 9:00 AM
+  const event = {
+    startDate: anchor,
+    endDate: new Date(2026, 0, 4, 17, 0), // Sunday Jan 4, 5:00 PM — one day later
+    recurringEndDate: null, // indefinite
+    recurringFrequency: 'Monthly (same day of the week)',
+    recurringInterval: 1,
+    recurringDays: [],
+    recurringSkipDates: [],
+  };
+  const occ = getOccurrences(event, anchor, new Date(2026, 3, 30));
+  assert.ok(occ.length >= 2);
+  occ.forEach((o) => {
+    const diffDays = Math.round((startOfDayLocal(o.end) - startOfDayLocal(o.start)) / 86400000);
+    assert.equal(diffDays, 1);
+    assert.equal(o.end.getHours(), 17);
+    assert.equal(o.end.getMinutes(), 0);
+  });
+});
+
+test('Weekly, multi-day, NO Recurring Days set — End Date offset shifts forward with each occurrence', () => {
+  const start = new Date(2026, 7, 5, 9, 0); // Aug 5, 2026, 9:00 AM
+  const end = new Date(2026, 7, 6, 17, 0); // Aug 6, 2026, 5:00 PM — one day later
+  const event = {
+    startDate: start,
+    endDate: end,
+    recurringEndDate: null,
+    recurringFrequency: 'Weekly',
+    recurringInterval: 1,
+    recurringDays: [],
+    recurringSkipDates: [],
+  };
+  const occ = getOccurrences(event, start, new Date(2026, 7, 31));
+  assert.ok(occ.length >= 2);
+  assert.equal(dateKey(occ[0].start), '2026-08-05');
+  assert.equal(dateKey(occ[0].end), '2026-08-06');
+  assert.equal(dateKey(occ[1].start), '2026-08-12');
+  assert.equal(dateKey(occ[1].end), '2026-08-13');
+  occ.forEach((o) => assert.equal(o.end.getHours(), 17));
+});
+
+test('Weekly, multi-day, Recurring Days SET — End Date\'s day offset is ignored; each occurrence stays single-day', () => {
+  const anchor = new Date(2026, 0, 6, 9, 0); // 9:00 AM
+  const otherDow = (anchor.getDay() + 2) % 7;
+  const end = new Date(2026, 0, 7, 17, 0); // one calendar day later — would shift dates if the offset applied
+  const event = {
+    startDate: anchor,
+    endDate: end,
+    recurringEndDate: null,
+    recurringFrequency: 'Weekly',
+    recurringInterval: 1,
+    recurringDays: [DOW[anchor.getDay()], DOW[otherDow]],
+    recurringSkipDates: [],
+  };
+  const occ = getOccurrences(event, anchor, addDays(anchor, 13)); // 2 weeks
+  assert.equal(occ.length, 4);
+  occ.forEach((o) => {
+    assert.equal(dateKey(o.start), dateKey(o.end)); // no day offset — end stays same calendar day as start
+    assert.equal(o.end.getHours(), 17);
   });
 });
 
@@ -184,7 +272,7 @@ test('No occurrences generated before the event\'s own Start Date', () => {
   const anchor = new Date(2026, 0, 15, 9, 0);
   const event = {
     startDate: anchor,
-    endDate: new Date(2026, 0, 15, 10, 0),
+    endDate: null,
     recurringFrequency: 'Weekly',
     recurringInterval: 1,
     recurringDays: [],
@@ -192,6 +280,7 @@ test('No occurrences generated before the event\'s own Start Date', () => {
   };
   // range starts well before Start Date
   const occ = getOccurrences(event, new Date(2026, 0, 1), new Date(2026, 0, 31));
+  assert.ok(occ.length > 1); // exercise a genuinely multi-occurrence series, not a coincidental single match
   assert.ok(occ.every((o) => o.start >= anchor));
 });
 
@@ -257,4 +346,45 @@ test('parseDynamoDateTime — noon/midnight edge cases (12 am / 12 pm)', () => {
 test('parseDynamoDateTime — empty/missing input returns null', () => {
   assert.equal(parseDynamoDateTime(''), null);
   assert.equal(parseDynamoDateTime(undefined), null);
+});
+
+test('parseEventFromJSON — parses Recurring End Date via parseDynamoDate', () => {
+  const parsed = parseEventFromJSON({
+    startDateTime: '2026-01-01 9:00 am',
+    endDateTime: '2026-01-01 10:00 am',
+    recurringFrequency: 'Weekly',
+    recurringInterval: '1',
+    recurringDays: 'Tue',
+    recurringEndDate: 'March 15, 2026',
+    recurringSkipDates: '',
+  });
+  assert.ok(parsed.recurringEndDate instanceof Date);
+  assert.equal(parsed.recurringEndDate.getFullYear(), 2026);
+  assert.equal(parsed.recurringEndDate.getMonth(), 2);
+  assert.equal(parsed.recurringEndDate.getDate(), 15);
+});
+
+test('parseEventFromJSON — unset Recurring End Date parses to null (indefinite)', () => {
+  const parsed = parseEventFromJSON({
+    startDateTime: '2026-01-01 9:00 am',
+    endDateTime: '2026-01-01 10:00 am',
+    recurringFrequency: 'Weekly',
+    recurringInterval: '1',
+    recurringDays: 'Tue',
+    recurringEndDate: '',
+    recurringSkipDates: '',
+  });
+  assert.equal(parsed.recurringEndDate, null);
+});
+
+test('parseDynamoDate — parses the "MMMM D, YYYY" format Dynamo emits for Recurring End Date', () => {
+  const d = parseDynamoDate('August 4, 2026');
+  assert.equal(d.getFullYear(), 2026);
+  assert.equal(d.getMonth(), 7);
+  assert.equal(d.getDate(), 4);
+});
+
+test('parseDynamoDate — empty/missing input returns null', () => {
+  assert.equal(parseDynamoDate(''), null);
+  assert.equal(parseDynamoDate(undefined), null);
 });

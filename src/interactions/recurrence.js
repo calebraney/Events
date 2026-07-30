@@ -14,7 +14,8 @@
 // Event shape expected:
 //   {
 //     startDate: Date,               // includes time-of-day
-//     endDate: Date | null,          // see note below
+//     endDate: Date | null,          // this occurrence's own end — see note below
+//     recurringEndDate: Date | null, // series cutoff — see note below, only used when recurring
 //     recurringFrequency: 'None' | 'Daily' | 'Weekly' | 'Monthly (same date)'
 //                        | 'Monthly (same day of the week)' | 'Yearly',
 //     recurringInterval: number,     // every N [frequency units], >= 1
@@ -22,16 +23,32 @@
 //     recurringSkipDates: string[],  // 'YYYY-MM-DD' strings
 //   }
 //
-// End Date/Time is dual-purpose when the event is recurring: its TIME-OF-DAY
-// portion is applied to every occurrence as its end time; its DATE portion is
-// the series cutoff (the last day an occurrence can start on) *only when it
-// falls on a different calendar day than Start Date/Time* — same-day just
-// means "today's end time" (e.g. a weekly 6–8pm class), which is indefinite,
-// not a one-occurrence series. Per-occurrence duration is derived from the
-// time-of-day alone, never from raw (endDate - startDate), since that
-// difference between a first occurrence and a far-future series cutoff isn't
-// a meaningful "duration." For a non-recurring event, End Date/Time keeps its
-// plain meaning: that single event's actual end (which may be a different day).
+// End Date/Time and Recurring End Date are two independent fields with two
+// independent jobs — they used to be conflated into one field and that was
+// confusing (a single-day series cutoff also had to double as "this occurrence
+// ends the same day"), so they're kept separate:
+//
+// - End Date/Time (`endDate`) describes this occurrence's own end, reapplied
+//   to every generated occurrence: its TIME-OF-DAY becomes every occurrence's
+//   end time, and if its DATE is later than Start Date's, that day offset
+//   (e.g. +1 day for an event that runs Saturday into Sunday) is reapplied to
+//   every occurrence too, so a recurring multi-day event (e.g. "the first
+//   Saturday–Sunday of every month") still spans the right number of days each
+//   time. Unset = same day and time as Start Date/Time.
+//
+//   Exception: when Weekly and Recurring Days is set (e.g. Tue+Thu), each
+//   listed weekday is its own separate single-day occurrence, not a span — so
+//   the day offset is ignored (End Date/Time's time-of-day still applies).
+//
+// - Recurring End Date (`recurringEndDate`) is date-only and is the series
+//   cutoff (the last day an occurrence can start on), used only when the
+//   event is recurring. There's no "same-day means indefinite" special case:
+//   if it's set at all — even to the same calendar day as Start Date — the
+//   series stops there. A truly indefinite recurring event must leave
+//   Recurring End Date empty.
+//
+// For a non-recurring event, only End Date/Time matters, with its plain
+// meaning: that single event's actual end (which may be a different day).
 // ============================================================================
 
 const WEEKDAY_INDEX = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
@@ -40,6 +57,7 @@ export function getOccurrences(event, rangeStart, rangeEnd) {
   const {
     startDate,
     endDate,
+    recurringEndDate,
     recurringFrequency = 'None',
     recurringInterval = 1,
     recurringDays = [],
@@ -59,14 +77,13 @@ export function getOccurrences(event, rangeStart, rangeEnd) {
   const skipSet = new Set(recurringSkipDates);
   const startDay = startOfDay(startDate);
 
-  // Series cutoff (date-only) and per-occurrence end time-of-day — see header note.
-  // End Date/Time only counts as a cutoff when it falls on a *different* calendar
-  // day than Start Date/Time — same-day just means "today's end time" (indefinite),
-  // which is what most recurring events (e.g. a weekly 6–8pm class) will have.
-  const endDateDay = endDate ? startOfDay(endDate) : null;
-  const seriesEndDate = endDateDay && endDateDay.getTime() !== startDay.getTime() ? endDateDay : null;
+  // Series cutoff — its own dedicated field, independent of End Date/Time — see header note.
+  const seriesEndDate = recurringEndDate ? startOfDay(recurringEndDate) : null;
+  // Per-occurrence end time-of-day and multi-day span offset, reapplied to every occurrence.
   const endHours = endDate ? endDate.getHours() : startDate.getHours();
   const endMinutes = endDate ? endDate.getMinutes() : startDate.getMinutes();
+  const usesRecurringDays = recurringFrequency === 'Weekly' && recurringDays.length > 0;
+  const endDayOffset = endDate && !usesRecurringDays ? daysBetween(startDay, startOfDay(endDate)) : 0;
 
   const loopStart = startDate > rangeStart ? startDate : rangeStart;
   const loopEndDate = seriesEndDate && seriesEndDate < rangeEnd ? seriesEndDate : rangeEnd;
@@ -115,7 +132,7 @@ export function getOccurrences(event, rangeStart, rangeEnd) {
     if (matchesFrequency(cursor) && !skipSet.has(toDateKey(cursor))) {
       results.push({
         start: combineDateAndTime(cursor, startDate.getHours(), startDate.getMinutes()),
-        end: combineDateAndTime(cursor, endHours, endMinutes),
+        end: combineDateAndTime(addDays(cursor, endDayOffset), endHours, endMinutes),
       });
     }
     cursor = addDays(cursor, 1);
@@ -133,6 +150,7 @@ export function parseEventFromJSON(raw) {
     slug: raw.slug || '',
     startDate: parseDynamoDateTime(raw.startDateTime),
     endDate: parseDynamoDateTime(raw.endDateTime),
+    recurringEndDate: parseDynamoDate(raw.recurringEndDate),
     showStartTime: parseBool(raw.showStartTime),
     showEndTime: parseBool(raw.showEndTime),
     showEndDate: parseBool(raw.showEndDate),
@@ -161,6 +179,26 @@ export function parseDynamoDateTime(str) {
     if (ampm.toLowerCase() === 'pm' && hours < 12) hours += 12;
     if (ampm.toLowerCase() === 'am' && hours === 12) hours = 0;
     return new Date(+y, +mo - 1, +d, hours, +min);
+  }
+  const native = new Date(s);
+  return isNaN(native.getTime()) ? null : native;
+}
+
+const MONTH_NAMES = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+// Dynamo renders Recurring End Date (a date-only field) as "MMMM D, YYYY" (e.g. "August 4, 2026").
+export function parseDynamoDate(str) {
+  if (!str) return null;
+  const s = str.trim();
+  if (!s) return null;
+  const m = s.match(/^([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})$/);
+  if (m) {
+    const [, monthName, d, y] = m;
+    const monthIndex = MONTH_NAMES.findIndex((name) => name.toLowerCase() === monthName.toLowerCase());
+    if (monthIndex !== -1) return new Date(+y, monthIndex, +d);
   }
   const native = new Date(s);
   return isNaN(native.getTime()) ? null : native;

@@ -114,3 +114,13 @@ All interactions live in `src/interactions/`:
 Both `event-list.js` and `calendar.js` read `[data-ix-events="wrap"]` elements and self-filter on `data-ix-events-layout`, so a List View / Calendar toggle on one page shares one attribute contract instead of two.
 
 The List View's cards can live in the same Collection List as the JSON data, or in a completely separate one — `event-list.js` auto-detects per item (JSON nested in the item = combined; no JSON = looks up by `data-ix-events-slug` against the page's data-wrap instead).
+
+### External dependency: Finsweet Attributes (List View only)
+
+`event-list.js` delegates its DOM lifecycle (filtering, item creation, rendering) to [Finsweet Attributes' List solution](https://finsweet.com/attributes/list-filter), used via its **programmatic API** (`List.addHook`, `List.createItem`, `List.triggerHook`), not its declarative checkbox/select filtering — that mode has no concept of expanding one CMS item into multiple occurrence dates, so it can't replace `recurrence.js`. This module only computes *which* occurrences exist for the active month and hands the result to Finsweet's `'filter'` hook; Finsweet owns the actual render.
+
+Requires, once per site:
+- The Finsweet script in the `<head>`, scoped to only load the `list` module: `<script async type="module" src="https://cdn.jsdelivr.net/npm/@finsweet/attributes@2/attributes.js" fs-list></script>`
+- `fs-list-element="list"` on the same Collection List element that carries `data-ix-events="data-wrap"` (or the separate card Collection List, in separate-list mode).
+
+`calendar.js` is unaffected — Finsweet's list/pagination model doesn't apply to a month-grid calendar.
