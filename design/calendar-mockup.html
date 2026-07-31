@@ -1,0 +1,1338 @@
+<!--
+  Calendar mockup v4. Paste this ENTIRE file into Webflow in one go — do not
+  split it into separate pastes, since pasting overlapping <style> blocks
+  separately is what caused Webflow to duplicate classes last time. There is
+  exactly ONE <style> block below (inside PART 1), and it covers every class
+  used across all three parts — Parts 2 and 3 intentionally have no <style>
+  of their own and just reuse those same class names.
+
+  Search for "PART 1" / "PART 2" / "PART 3" to jump to each piece:
+
+  PART 1 — STYLEGUIDE: one example of every class/combo-class the component
+    uses (pill positions, event-type colors, disabled nav, active toggles,
+    the today+outside-month combination, etc.) so you can select each state
+    in the Designer and style it. Carries no data-ix-events attributes, so
+    calendar.js never initializes it as a live instance. Most of these combo
+    classes are only ever added by JS at runtime — Part 2/3 are authored
+    clean/empty — so keep this block live on your site somewhere (a hidden
+    utility page works) or Webflow will purge their CSS on publish.
+
+  PART 2 — MONTH VIEW: ready to paste in and use. Day numbers/weekday
+    labels/month label below are filled with placeholder text purely so the
+    grid isn't blank while you're working in the Designer — calendar.js
+    overwrites all of it on load. One manual step left: wrap the single
+    hover-card example in a Webflow Collection List + Collection Item bound
+    to the Events collection, in the exact same position (flagged inline).
+
+  PART 3 — WEEK VIEW: same idea, for data-ix-events-range="week". Its own
+    (simpler) structure — only 7 day-cells, since a week-only instance never
+    needs the other 35.
+
+  None of the three carry a <section>/u-section wrapper or a u-container —
+  page-level layout (section, container, theme class) is expected to come
+  from whatever Webflow structure you drop the calendar into. The header
+  nav's responsive row/column switch (--column-medium etc.) still needs some
+  ancestor with container-type:inline-size above it (a u-container is the
+  normal way to get that) for its breakpoint behavior to resolve.
+
+  Global design tokens (set once on .calendar_wrap, used everywhere below):
+    --cell-padding                                    inner cell padding
+    --cell-border-width-top/-right/-bottom/-left       independently
+                                                        customizable border
+                                                        widths per side —
+                                                        set any to 0 for no
+                                                        border on that side
+    --cell-border-color                               shared border color
+    --grid-radius                                      outer grid corner
+                                                        radius
+    --pill-height / --pill-gap / --pill-radius         pill sizing
+    --hover-card-gap                                   space between a pill
+                                                        and its hover card
+    --hover-card-move                                  distance the hover
+                                                        card slides while
+                                                        fading in/out
+
+  Border technique: every day-cell has its OWN full border on all four
+  sides, then pulls itself over its neighbors by exactly its own border
+  width via negative margins (padding adds that same width back so the
+  content area doesn't shift) — the classic border-collapse trick, so two
+  adjacent cells' borders always render as one line, never doubled up, no
+  matter what each side's width is set to. The grid itself carries a
+  matching border + overflow:clip + border-radius so the whole thing reads
+  as one rounded rectangle.
+-->
+
+<!-- ============================================================
+     PART 1 — STYLEGUIDE
+     ============================================================ -->
+
+<div class="calendar_wrap">
+  <style>
+    /* position: relative so this is ALWAYS the hover-card's offsetParent —
+       whether it stays wherever the Designer authored it (typically inside
+       .calendar_layout, itself also position:relative) or gets relocated
+       here directly by unwrapFromHiddenAncestor() in calendar.js. Without
+       this, a relocated card's nearest positioned ancestor can end up being
+       something far outside the calendar entirely (e.g. <body>), which
+       makes its computed left/top land relative to the whole page instead
+       of the calendar. */
+    .calendar_wrap {
+      position: relative;
+      --cell-padding: var(--_spacing---space--3);
+      --cell-min-height: 6rem;
+      --cell-border-width-top: var(--border-width--main);
+      --cell-border-width-right: var(--border-width--main);
+      --cell-border-width-bottom: var(--border-width--main);
+      --cell-border-width-left: var(--border-width--main);
+      --cell-border-color: var(--_theme---border--border-primary);
+      --grid-radius: var(--border-radius--small);
+      --pill-height: 1.75rem;
+      --pill-gap: var(--_spacing---space--1);
+      --pill-radius: var(--border-radius--small);
+      --hover-card-gap: 1rem;
+      --hover-card-move: 0.75rem;
+    }
+
+    .calendar_layout {
+      display: flex;
+      flex-direction: column;
+      gap: var(--_spacing---space--5);
+      width: 100%;
+      position: relative;
+    }
+
+    /* ── Header: label + nav ─────────────────────────────────────────── */
+
+    .calendar_top {
+      display: flex;
+      flex-direction: var(--column-medium, row);
+      align-items: var(--start-medium, center);
+      justify-content: space-between;
+      gap: var(--_spacing---space--3);
+      width: 100%;
+    }
+
+    .calendar_label {
+      margin-bottom: 0;
+    }
+
+    .calendar_nav_today_wrap {
+      padding: var(--_spacing---space--2) var(--_spacing---space--3);
+      background-color: transparent;
+      border: none;
+      font: inherit;
+      color: color-mix(
+        in hsl,
+        var(--_theme---text-link--text) calc(100% * var(--_trigger---on)),
+        var(--_theme---text-link--text-hover) calc(100% * var(--_trigger---off))
+      );
+      transition: color 300ms;
+    }
+
+    .calendar_nav_today_wrap.is-disabled {
+      opacity: 0.5;
+      pointer-events: none;
+    }
+
+    .calendar_nav_prev_wrap,
+    .calendar_nav_next_wrap {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: var(--_spacing---space--8);
+      aspect-ratio: 1 / 1;
+      padding: 0;
+      background-color: color-mix(
+        in hsl,
+        var(--_theme---button-primary--background) calc(100% * var(--_trigger---on)),
+        var(--_theme---button-primary--background-hover) calc(100% * var(--_trigger---off))
+      );
+      color: color-mix(
+        in hsl,
+        var(--_theme---button-primary--text) calc(100% * var(--_trigger---on)),
+        var(--_theme---button-primary--text-hover) calc(100% * var(--_trigger---off))
+      );
+      border-color: color-mix(
+        in hsl,
+        var(--_theme---button-primary--border) calc(100% * var(--_trigger---on)),
+        var(--_theme---button-primary--border-hover) calc(100% * var(--_trigger---off))
+      );
+      border-width: var(--border-width--main);
+      border-radius: var(--border-radius--round);
+      transition: all 300ms;
+    }
+
+    .calendar_nav_prev_wrap.is-disabled,
+    .calendar_nav_next_wrap.is-disabled {
+      opacity: 0.5;
+      pointer-events: none;
+    }
+
+    .calendar_nav_prev_svg,
+    .calendar_nav_next_svg {
+      width: var(--_spacing---space--4);
+      aspect-ratio: 1 / 1;
+      fill: none;
+      stroke: currentColor;
+    }
+
+    .calendar_nav_prev_path,
+    .calendar_nav_next_path {
+      stroke-width: var(--border-width--main);
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+
+    /* ── Weekday header row ──────────────────────────────────────────── */
+
+    .calendar_weekdays {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      /* A calendar week is inherently 7 columns — a deliberate exception to
+         the usual repeat(12, minmax(0,1fr)) layout-grid convention. */
+      width: 100%;
+    }
+
+    .calendar_weekdays_item {
+      color: var(--_theme---text--text-faded);
+    }
+
+    /* ── Day grid ─────────────────────────────────────────────────────── */
+
+    .calendar_grid {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      width: 100%;
+      position: relative;
+      overflow: clip;
+      border-style: solid;
+      border-color: var(--cell-border-color);
+      border-width: var(--cell-border-width-top) var(--cell-border-width-right)
+        var(--cell-border-width-bottom) var(--cell-border-width-left);
+      border-radius: var(--grid-radius);
+    }
+
+    /* Every cell owns a full border on all four sides, then pulls itself
+       over its neighbors by exactly its own border width via negative
+       margins — the standard border-collapse trick, so two adjacent
+       borders always render as one line no matter what width each side is
+       set to (including 0, or a deliberately different top vs. bottom
+       width). Padding adds that same width back on top of --cell-padding
+       so the content area itself never shifts regardless of border width.
+       Normal document flow otherwise — day-number, day-pills, and day-more
+       just stack vertically and the cell's own height (min-height as a
+       floor, never a cap) grows with whatever they need; CSS Grid's own
+       row auto-sizing then stretches every cell in the row to match its
+       tallest neighbor. */
+    .calendar_day_wrap {
+      display: flex;
+      flex-direction: column;
+      gap: var(--_spacing---space--2);
+      min-height: var(--cell-min-height);
+      background-color: var(--_theme---background--background-primary);
+      border-style: solid;
+      border-color: var(--cell-border-color);
+      border-width: var(--cell-border-width-top) var(--cell-border-width-right)
+        var(--cell-border-width-bottom) var(--cell-border-width-left);
+      margin-top: calc(-1 * var(--cell-border-width-top));
+      margin-right: calc(-1 * var(--cell-border-width-right));
+      margin-bottom: calc(-1 * var(--cell-border-width-bottom));
+      margin-left: calc(-1 * var(--cell-border-width-left));
+      padding-top: calc(var(--cell-border-width-top) + var(--cell-padding));
+      padding-right: calc(var(--cell-border-width-right) + var(--cell-padding));
+      padding-bottom: calc(var(--cell-border-width-bottom) + var(--cell-padding));
+      padding-left: calc(var(--cell-border-width-left) + var(--cell-padding));
+    }
+
+    .calendar_day_wrap.is-outside {
+      background-color: var(--_theme---background--background-secondary);
+    }
+
+    .calendar_day_wrap.is-range-week {
+      min-height: 16rem;
+    }
+
+    .calendar_day_number {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      width: var(--_spacing---space--6);
+      aspect-ratio: 1 / 1;
+      border-radius: var(--border-radius--round);
+    }
+
+    .calendar_day_wrap.is-outside .calendar_day_number {
+      color: var(--_theme---text--text-faded);
+    }
+
+    .calendar_day_number.is-today {
+      background-color: var(--_theme---text--text-primary);
+      color: var(--_theme---background--background-primary);
+    }
+
+    /* Wins over the is-outside rule above even though that rule's selector
+       has more classes (and would otherwise beat this one on specificity
+       alone). Without it, a day that's simultaneously "today" and an
+       outside-month day — which happens whenever you navigate to a
+       month/week where today's real date falls in the leading/trailing
+       adjacent-month cells — rendered with the faded outside-day text
+       color instead of the inverted today color; since that color and the
+       circle's own background both derive from the same theme text tone,
+       the number became unreadable, effectively the same color on top of
+       itself. See the is-outside + is-today example cell below. */
+    .calendar_day_wrap.is-outside .calendar_day_number.is-today {
+      color: var(--_theme---background--background-primary);
+    }
+
+    /* Real pill pieces (and, where a row has a gap lane, spacers) get
+       appended here in lane order, in normal flow. Empty by default —
+       padding:0 since it has no content of its own until JS fills it. */
+    .calendar_day_pills {
+      display: flex;
+      flex-direction: column;
+      gap: var(--pill-gap);
+      width: 100%;
+      padding: 0;
+    }
+
+    /* A real <button>, not a plain div — clicking it only ever triggers
+       the expand behavior for THIS day-more element (calendar.js checks
+       e.target.closest on this specific selector), never the whole cell,
+       so pills stay independently clickable/linkable to their own event
+       pages regardless of overflow state. */
+    .calendar_day_more {
+      display: none;
+      width: 100%;
+      padding: var(--_spacing---space--1) 0;
+      background-color: transparent;
+      border: none;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      color: color-mix(
+        in hsl,
+        var(--_theme---text-link--text) calc(100% * var(--_trigger---on)),
+        var(--_theme---text-link--text-hover) calc(100% * var(--_trigger---off))
+      );
+      transition: color 300ms;
+    }
+
+    .calendar_day_more.is-active {
+      display: block;
+    }
+
+    /* ── Pill / spacer ────────────────────────────────────────────────── */
+
+    .calendar_pill_wrap {
+      display: flex;
+      align-items: center;
+      gap: var(--pill-gap);
+      height: var(--pill-height);
+      width: 100%;
+      padding: 0 var(--_spacing---space--2);
+      background-color: var(--_theme---background--background-secondary);
+      color: var(--_theme---text--text-primary);
+      border-radius: var(--pill-radius);
+      text-decoration: none;
+      overflow: clip;
+      transition: background-color 300ms;
+    }
+
+    /* Segment-piece position within its own occurrence's span — a
+       multi-day event is clipped into one segment per week-row it crosses,
+       and each DAY that segment covers gets its own piece, one of these
+       four. Continuation edges bleed all the way to the cell's own border
+       (ignoring --cell-padding on that side) via min-width — is-start only
+       needs to grow rightward (its left edge is the occurrence's true
+       start, stays padded normally); is-middle and is-end also shift
+       themselves left via a matching negative margin, since growing width
+       alone only ever extends an element's RIGHT edge, not its left one.
+       Rounding only ever applies to the occurrence's TRUE outer edges. */
+    .calendar_pill_wrap.is-start {
+      min-width: calc(100% + var(--cell-padding));
+      border-radius: var(--pill-radius) 0 0 var(--pill-radius);
+    }
+
+    .calendar_pill_wrap.is-middle {
+      min-width: calc(100% + var(--cell-padding) * 2);
+      margin-left: calc(-1 * var(--cell-padding));
+      border-radius: 0;
+    }
+
+    .calendar_pill_wrap.is-end {
+      min-width: calc(100% + var(--cell-padding));
+      margin-left: calc(-1 * var(--cell-padding));
+      border-radius: 0 var(--pill-radius) var(--pill-radius) 0;
+    }
+
+    .calendar_pill_wrap.is-single {
+      border-radius: var(--pill-radius);
+    }
+
+    .calendar_pill_name {
+      overflow: clip;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+    }
+
+    .calendar_pill_date {
+      flex-shrink: 0;
+      color: var(--_theme---text--text-faded);
+    }
+
+    /* Invisible placeholder taking up exactly one pill's height — used when
+       a day-cell has a real segment at a lane ABOVE an empty one (e.g. an
+       event touches this day at lane 2 but not lane 1, because the lane-1
+       event doesn't span this particular day). Without it, this day's pill
+       stack would compress upward and the lane-2 bar would no longer line
+       up with lane-2 bars in neighboring day-cells that DO have a lane-1
+       item. Never shown for a lane past the last one this day actually
+       uses — a quiet day with one early-lane event stays short. Multi-day
+       events are lane-assigned ahead of single-day ones, so they always
+       occupy the lowest lanes and land at the top of the stack. */
+    .calendar_pill_spacer {
+      height: var(--pill-height);
+      padding: 0;
+    }
+
+    /* Event Type color-coding — the script adds one of these based on the
+       CMS "Event Type" field (falls back to a rotating is-color-1/2/3 set
+       when Event Type is blank). Left unstyled here on purpose: define
+       each type's actual look per client directly in the Designer — that's
+       the whole point of this being a class hook instead of a hard-coded
+       color. */
+    .calendar_pill_wrap.is-type-gala,
+    .calendar_pill_wrap.is-type-meeting,
+    .calendar_pill_wrap.is-type-workshop,
+    .calendar_pill_wrap.is-type-webinar,
+    .calendar_pill_wrap.is-color-1,
+    .calendar_pill_wrap.is-color-2,
+    .calendar_pill_wrap.is-color-3 {
+      /* style per client */
+    }
+
+    /* ── Loading overlay ──────────────────────────────────────────────── */
+
+    .calendar_loading {
+      display: none;
+      justify-content: center;
+      align-items: center;
+      position: absolute;
+      inset: 0;
+      background-color: var(--_theme---background--background-skeleton);
+    }
+
+    .calendar_loading.is-active {
+      display: flex;
+    }
+
+    /* ── Demo-data note ───────────────────────────────────────────────── */
+
+    .calendar_demo_note {
+      display: none;
+      text-align: center;
+      color: var(--_theme---text--text-faded);
+    }
+
+    .calendar_demo_note.is-active {
+      display: block;
+    }
+
+    /* ── Hover card ───────────────────────────────────────────────────── */
+    /* The one place absolute positioning still applies — a hover card
+       floats freely next to whichever pill is hovered and can't be
+       expressed as normal document flow. */
+
+    /* Always position:absolute and display:flex — even while hidden — so
+       its size can be measured (getBoundingClientRect) before it's shown,
+       and so opacity/transform can actually transition (a display:none/flex
+       toggle can't animate). Hidden state is opacity/visibility/
+       pointer-events/transform only; is-active flips all four, in both
+       directions — removing is-active (calendar.js's hideHoverCard()) plays
+       the same transition back out, no separate "hide" styling needed.
+       left/top are set by JS at runtime (left-aligned with whichever pill
+       is hovered, shown above or below it depending which half of the
+       viewport it's in, clamped within the calendar's own bounds either
+       way — see showHoverCard() in calendar.js). is-above/is-below (also
+       JS-set, one or the other, always present alongside is-active) pick
+       which direction the motion runs: a card above its pill rises up on
+       the way in and settles back down on the way out; a card below drops
+       down on the way in and rises back up on the way out — a plain
+       opacity fade would work too, but the reveal/dismiss reads a little
+       livelier with this small directional motion baked in (distance set by
+       --hover-card-move, default 0.75rem).
+
+       visibility has its own transition, deliberately asymmetric via
+       transition-delay: instant (0s delay) when is-active is ADDED, so the
+       card is actually paintable right as the fade-in starts, but delayed
+       until the fade-out's full duration has elapsed when is-active is
+       REMOVED (delay == the opacity/transform duration), so the card stays
+       visible (and thus visibly fading/sliding) for the whole exit instead
+       of vanishing the instant the class comes off — visibility itself
+       never animates (0s duration), only the timing of its flip does. */
+    .calendar_hover_card_wrap {
+      display: flex;
+      flex-direction: column;
+      gap: var(--_spacing---space--2);
+      width: 20rem;
+      padding: var(--_spacing---space--4);
+      background-color: var(--_theme---background--background-primary);
+      color: var(--_theme---text--text-primary);
+      border-color: var(--_theme---border--border-primary);
+      border-width: var(--border-width--main);
+      border-radius: var(--border-radius--main);
+      position: absolute;
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 150ms ease, transform 150ms ease, visibility 0s linear 150ms;
+      z-index: 10;
+    }
+
+    .calendar_hover_card_wrap.is-above {
+      transform: translateY(var(--hover-card-move));
+    }
+
+    .calendar_hover_card_wrap.is-below {
+      transform: translateY(calc(-1 * var(--hover-card-move)));
+    }
+
+    .calendar_hover_card_wrap.is-active {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateY(0);
+      transition: opacity 150ms ease, transform 150ms ease, visibility 0s linear 0s;
+    }
+
+    .calendar_hover_card_img {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      border-radius: var(--pill-radius);
+      background-color: var(--_theme---background--background-skeleton);
+    }
+
+    .calendar_hover_card_title {
+      margin-bottom: var(--_text-style---margin-bottom);
+    }
+
+    .calendar_hover_card_meta {
+      margin-bottom: var(--_text-style---margin-bottom);
+      color: var(--_theme---text--text-faded);
+    }
+
+    .calendar_hover_card_text {
+      margin-bottom: 0;
+    }
+
+    .calendar_hidden {
+      padding: 0;
+    }
+  </style>
+
+  <div class="calendar_layout">
+    <!-- Nav button states: normal + is-disabled, for all three buttons -->
+    <div class="calendar_top">
+      <div class="calendar_label u-text-style-h3">August 2026</div>
+      <div class="calendar_nav u-button-wrapper">
+        <button type="button" class="calendar_nav_today_wrap">Today</button>
+        <button type="button" class="calendar_nav_today_wrap is-disabled">Today</button>
+        <button type="button" class="calendar_nav_prev_wrap">
+          <svg class="calendar_nav_prev_svg" viewBox="0 0 16 16" aria-hidden="true">
+            <path class="calendar_nav_prev_path" d="M10 13L5 8L10 3"></path>
+          </svg>
+        </button>
+        <button type="button" class="calendar_nav_prev_wrap is-disabled">
+          <svg class="calendar_nav_prev_svg" viewBox="0 0 16 16" aria-hidden="true">
+            <path class="calendar_nav_prev_path" d="M10 13L5 8L10 3"></path>
+          </svg>
+        </button>
+        <button type="button" class="calendar_nav_next_wrap">
+          <svg class="calendar_nav_next_svg" viewBox="0 0 16 16" aria-hidden="true">
+            <path class="calendar_nav_next_path" d="M6 3L11 8L6 13"></path>
+          </svg>
+        </button>
+        <button type="button" class="calendar_nav_next_wrap is-disabled">
+          <svg class="calendar_nav_next_svg" viewBox="0 0 16 16" aria-hidden="true">
+            <path class="calendar_nav_next_path" d="M6 3L11 8L6 13"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Weekday header -->
+    <div class="calendar_weekdays">
+      <div class="calendar_weekdays_item u-text-style-small">Sun</div>
+      <div class="calendar_weekdays_item u-text-style-small">Mon</div>
+      <div class="calendar_weekdays_item u-text-style-small">Tue</div>
+      <div class="calendar_weekdays_item u-text-style-small">Wed</div>
+      <div class="calendar_weekdays_item u-text-style-small">Thu</div>
+      <div class="calendar_weekdays_item u-text-style-small">Fri</div>
+      <div class="calendar_weekdays_item u-text-style-small">Sat</div>
+    </div>
+
+    <!-- Day-cell / pill-piece / color states, one per cell -->
+    <div class="calendar_grid">
+      <!-- normal, empty cell -->
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">1</div>
+        <div class="calendar_day_pills"></div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+
+      <!-- is-outside (leading/trailing adjacent-month day) -->
+      <div class="calendar_day_wrap is-outside">
+        <div class="calendar_day_number">31</div>
+        <div class="calendar_day_pills"></div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+
+      <!-- is-today -->
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number is-today">15</div>
+        <div class="calendar_day_pills"></div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+
+      <!-- is-outside AND is-today together — the combination that used to
+           break the today indicator's text/background contrast, see the
+           CSS comment on .calendar_day_wrap.is-outside .calendar_day_number.is-today above -->
+      <div class="calendar_day_wrap is-outside">
+        <div class="calendar_day_number is-today">1</div>
+        <div class="calendar_day_pills"></div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+
+      <!-- is-range-week (week-mode cell sizing) -->
+      <div class="calendar_day_wrap is-range-week">
+        <div class="calendar_day_number">9</div>
+        <div class="calendar_day_pills"></div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+
+      <!-- is-single pill -->
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">8</div>
+        <div class="calendar_day_pills">
+          <a href="#" class="calendar_pill_wrap is-single is-type-workshop">
+            <div class="calendar_pill_name u-text-style-small">Volunteer Orientation</div>
+            <div class="calendar_pill_date u-text-style-small">10am</div>
+          </a>
+        </div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+
+      <!-- is-start / is-middle / is-end, a 3-day span across 3 cells -->
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">28</div>
+        <div class="calendar_day_pills">
+          <a href="#" class="calendar_pill_wrap is-start is-type-meeting">
+            <div class="calendar_pill_name u-text-style-small">Board Retreat</div>
+          </a>
+        </div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">29</div>
+        <div class="calendar_day_pills">
+          <a href="#" class="calendar_pill_wrap is-middle is-type-meeting">
+            <div class="calendar_pill_name u-text-style-small">&nbsp;</div>
+          </a>
+        </div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">30</div>
+        <div class="calendar_day_pills">
+          <a href="#" class="calendar_pill_wrap is-end is-type-meeting">
+            <div class="calendar_pill_name u-text-style-small">&nbsp;</div>
+          </a>
+        </div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+
+      <!-- calendar_pill_spacer — a gap-lane example: this day has an event
+           at lane 0 (not shown here) and lane 2, but nothing at lane 1, so
+           a spacer fills lane 1 to keep the lane-2 pill aligned with lane-2
+           pills elsewhere in the row. -->
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">11</div>
+        <div class="calendar_day_pills">
+          <a href="#" class="calendar_pill_wrap is-single is-type-webinar">
+            <div class="calendar_pill_name u-text-style-small">Grant Writing 101</div>
+            <div class="calendar_pill_date u-text-style-small">2pm</div>
+          </a>
+          <div class="calendar_pill_spacer"></div>
+          <a href="#" class="calendar_pill_wrap is-single is-type-gala">
+            <div class="calendar_pill_name u-text-style-small">Gala Planning</div>
+          </a>
+        </div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+
+      <!-- day-more, "hide" mode (static, non-clickable — text is still
+           "+N more", it just never responds to a click) -->
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">18</div>
+        <div class="calendar_day_pills">
+          <a href="#" class="calendar_pill_wrap is-single is-type-gala">
+            <div class="calendar_pill_name u-text-style-small">Fundraiser</div>
+          </a>
+        </div>
+        <button type="button" class="calendar_day_more is-active">+2 more</button>
+      </div>
+
+      <!-- day-more, "expand" mode (default — same "+N more" text, but a
+           real clickable trigger that reveals the whole row) -->
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">19</div>
+        <div class="calendar_day_pills">
+          <a href="#" class="calendar_pill_wrap is-single is-type-gala">
+            <div class="calendar_pill_name u-text-style-small">Fundraiser</div>
+          </a>
+        </div>
+        <button type="button" class="calendar_day_more is-active">+3 more</button>
+      </div>
+
+      <!-- Event Type / fallback color classes -->
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">2</div>
+        <div class="calendar_day_pills">
+          <a href="#" class="calendar_pill_wrap is-single is-type-gala">
+            <div class="calendar_pill_name u-text-style-small">is-type-gala</div>
+          </a>
+        </div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">3</div>
+        <div class="calendar_day_pills">
+          <a href="#" class="calendar_pill_wrap is-single is-type-meeting">
+            <div class="calendar_pill_name u-text-style-small">is-type-meeting</div>
+          </a>
+        </div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">4</div>
+        <div class="calendar_day_pills">
+          <a href="#" class="calendar_pill_wrap is-single is-type-workshop">
+            <div class="calendar_pill_name u-text-style-small">is-type-workshop</div>
+          </a>
+        </div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">5</div>
+        <div class="calendar_day_pills">
+          <a href="#" class="calendar_pill_wrap is-single is-type-webinar">
+            <div class="calendar_pill_name u-text-style-small">is-type-webinar</div>
+          </a>
+        </div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">6</div>
+        <div class="calendar_day_pills">
+          <a href="#" class="calendar_pill_wrap is-single is-color-1">
+            <div class="calendar_pill_name u-text-style-small">is-color-1</div>
+          </a>
+        </div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">7</div>
+        <div class="calendar_day_pills">
+          <a href="#" class="calendar_pill_wrap is-single is-color-2">
+            <div class="calendar_pill_name u-text-style-small">is-color-2</div>
+          </a>
+        </div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+      <div class="calendar_day_wrap">
+        <div class="calendar_day_number">8</div>
+        <div class="calendar_day_pills">
+          <a href="#" class="calendar_pill_wrap is-single is-color-3">
+            <div class="calendar_pill_name u-text-style-small">is-color-3</div>
+          </a>
+        </div>
+        <button type="button" class="calendar_day_more"></button>
+      </div>
+    </div>
+
+    <!-- Loading overlay, is-active -->
+    <div class="calendar_loading is-active">
+      <div class="calendar_loading_text u-text-style-small">Loading events…</div>
+    </div>
+
+    <!-- Demo-data note, is-active -->
+    <div class="calendar_demo_note is-active">
+      <div class="calendar_demo_note_text">
+        No events data source found on this page — showing sample data.
+      </div>
+    </div>
+
+    <!-- Hover card, is-active -->
+    <div class="calendar_hover_card_wrap is-active">
+      <div class="calendar_hover_card_img"></div>
+      <div class="calendar_hover_card_content u-margin-trim">
+        <div class="calendar_hover_card_title u-text-style-h6">Volunteer Week</div>
+        <div class="calendar_hover_card_meta u-text-style-small">August 11-15th</div>
+        <div class="calendar_hover_card_meta u-text-style-small">Community Center, Main Hall</div>
+        <div class="calendar_hover_card_text u-text-style-small">
+          Join us for a week of volunteer projects across the community — sign up for one day or all
+          five.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     PART 2 — MONTH VIEW (ready to paste in and use)
+     No <style> block here — see the file header. Placeholder day
+     numbers/weekday labels/label text below are just so this isn't blank
+     in the Designer; calendar.js overwrites all of it on load.
+     data-ix-events-range defaults to "month" — no need to set it.
+     ============================================================ -->
+
+<div
+  class="calendar_wrap"
+  data-ix-events="wrap"
+  data-ix-events-layout="calendar"
+  data-ix-events-months="6"
+  data-ix-events-day-pill-limit="3"
+  data-ix-events-overflow-items="expand"
+  data-ix-events-link-format="/event/{slug}"
+>
+  <div class="calendar_layout">
+    <div class="calendar_top">
+      <div
+        class="calendar_label u-text-style-h3"
+        data-ix-events="label"
+        data-ix-events-label-format=""
+      >
+        August 2026
+      </div>
+      <div class="calendar_nav u-button-wrapper">
+        <button
+          type="button"
+          class="calendar_nav_today_wrap"
+          data-ix-events="today"
+          data-trigger="hover focus"
+        >
+          Today
+        </button>
+        <button
+          type="button"
+          class="calendar_nav_prev_wrap"
+          data-ix-events="prev"
+          data-trigger="hover focus"
+          aria-label="Previous month"
+        >
+          <svg class="calendar_nav_prev_svg" viewBox="0 0 16 16" aria-hidden="true">
+            <path class="calendar_nav_prev_path" d="M10 13L5 8L10 3"></path>
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="calendar_nav_next_wrap"
+          data-ix-events="next"
+          data-trigger="hover focus"
+          aria-label="Next month"
+        >
+          <svg class="calendar_nav_next_svg" viewBox="0 0 16 16" aria-hidden="true">
+            <path class="calendar_nav_next_path" d="M6 3L11 8L6 13"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="calendar_weekdays">
+      <div class="calendar_weekdays_item u-text-style-small" data-ix-events="weekday-label">
+        Sun
+      </div>
+      <div class="calendar_weekdays_item u-text-style-small" data-ix-events="weekday-label">
+        Mon
+      </div>
+      <div class="calendar_weekdays_item u-text-style-small" data-ix-events="weekday-label">
+        Tue
+      </div>
+      <div class="calendar_weekdays_item u-text-style-small" data-ix-events="weekday-label">
+        Wed
+      </div>
+      <div class="calendar_weekdays_item u-text-style-small" data-ix-events="weekday-label">
+        Thu
+      </div>
+      <div class="calendar_weekdays_item u-text-style-small" data-ix-events="weekday-label">
+        Fri
+      </div>
+      <div class="calendar_weekdays_item u-text-style-small" data-ix-events="weekday-label">
+        Sat
+      </div>
+    </div>
+
+    <!-- 42 day-cells, 6 rows x 7 columns, row-major DOM order. Build one,
+         duplicate 41 times. -->
+    <div class="calendar_grid" data-ix-events="grid">
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">1</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">2</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">3</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">4</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">5</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">6</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">7</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">8</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">9</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">10</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">11</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">12</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">13</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">14</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">15</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">16</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">17</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">18</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">19</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">20</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">21</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">22</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">23</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">24</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">25</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">26</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">27</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">28</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">29</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">30</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">31</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">32</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">33</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">34</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">35</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">36</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">37</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">38</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">39</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">40</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">41</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">42</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+    </div>
+
+    <div class="calendar_loading is-active" data-ix-events="loading">
+      <div class="calendar_loading_text u-text-style-small">Loading events…</div>
+    </div>
+
+    <div class="calendar_demo_note" data-ix-events="demo-note">
+      <div class="calendar_demo_note_text">
+        No events data source found on this page — showing sample data.
+      </div>
+    </div>
+
+    <!-- Hover card. TODO: wrap the [data-ix-events="hover-card"] element
+         below in a Webflow Collection List bound to the Events collection
+         (List Settings -> the Events collection), with the Collection Item
+         set to exactly this div — keep it in this same position in the
+         tree. JS finds every [data-ix-events="hover-card"] under wrap
+         directly, so it doesn't matter how deep the Collection
+         List/Item wrapper nests it. -->
+    <div class="calendar_hover_cards" data-ix-events="hover-cards">
+      <div
+        class="calendar_hover_card_wrap"
+        data-ix-events="hover-card"
+        data-ix-events-slug="{{wf:Slug}}"
+      >
+        <div class="calendar_hover_card_img"></div>
+        <div class="calendar_hover_card_content u-margin-trim">
+          <div class="calendar_hover_card_title u-text-style-h6" data-ix-events="name"></div>
+          <div
+            class="calendar_hover_card_meta u-text-style-small"
+            data-ix-events="date"
+            data-ix-events-date-format="FULLDATE"
+          ></div>
+          <div class="calendar_hover_card_meta u-text-style-small" data-ix-events="location"></div>
+          <div
+            class="calendar_hover_card_text u-text-style-small"
+            data-ix-events="short-description"
+          ></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Hidden templates — not shown on the live page, JS clones from
+         these. -->
+    <div class="calendar_hidden u-display-none">
+      <button
+        type="button"
+        class="calendar_nav_today_wrap is-disabled"
+        aria-hidden="true"
+        tabindex="-1"
+      ></button>
+
+      <a href="#" class="calendar_pill_wrap" data-ix-events="calendar-pill">
+        <div class="calendar_pill_name u-text-style-small" data-ix-events="name"></div>
+        <div
+          class="calendar_pill_date u-text-style-small"
+          data-ix-events="date"
+          data-ix-events-date-format="h:mma"
+        ></div>
+      </a>
+
+      <div class="calendar_pill_spacer" data-ix-events="calendar-pill-spacer"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     PART 3 — WEEK VIEW (ready to paste in and use)
+     No <style> block here — see the file header. data-ix-events-range="week"
+     — its own, simpler structure: only 7 day-cells (a week-mode instance
+     never needs the other 35). is-range-week is baked directly into the
+     static markup here (each cell) so it renders at the right size
+     immediately, before JS's first pass confirms it (calendar.js applies
+     the same class every render regardless, so this is belt-and-suspenders
+     against a flash of month-sized cells on load).
+     ============================================================ -->
+
+<div
+  class="calendar_wrap"
+  data-ix-events="wrap"
+  data-ix-events-layout="calendar"
+  data-ix-events-months="6"
+  data-ix-events-range="week"
+  data-ix-events-week-start="sunday"
+  data-ix-events-day-pill-limit="6"
+  data-ix-events-overflow-items="expand"
+  data-ix-events-link-format="/event/{slug}"
+>
+  <div class="calendar_layout">
+    <div class="calendar_top">
+      <div
+        class="calendar_label u-text-style-h3"
+        data-ix-events="label"
+        data-ix-events-label-format=""
+      >
+        Aug 9 - Aug 15, 2026
+      </div>
+      <div class="calendar_nav u-button-wrapper">
+        <button
+          type="button"
+          class="calendar_nav_today_wrap"
+          data-ix-events="today"
+          data-trigger="hover focus"
+        >
+          Today
+        </button>
+        <button
+          type="button"
+          class="calendar_nav_prev_wrap"
+          data-ix-events="prev"
+          data-trigger="hover focus"
+          aria-label="Previous week"
+        >
+          <svg class="calendar_nav_prev_svg" viewBox="0 0 16 16" aria-hidden="true">
+            <path class="calendar_nav_prev_path" d="M10 13L5 8L10 3"></path>
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="calendar_nav_next_wrap"
+          data-ix-events="next"
+          data-trigger="hover focus"
+          aria-label="Next week"
+        >
+          <svg class="calendar_nav_next_svg" viewBox="0 0 16 16" aria-hidden="true">
+            <path class="calendar_nav_next_path" d="M6 3L11 8L6 13"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="calendar_weekdays">
+      <div class="calendar_weekdays_item u-text-style-small" data-ix-events="weekday-label">
+        Sun
+      </div>
+      <div class="calendar_weekdays_item u-text-style-small" data-ix-events="weekday-label">
+        Mon
+      </div>
+      <div class="calendar_weekdays_item u-text-style-small" data-ix-events="weekday-label">
+        Tue
+      </div>
+      <div class="calendar_weekdays_item u-text-style-small" data-ix-events="weekday-label">
+        Wed
+      </div>
+      <div class="calendar_weekdays_item u-text-style-small" data-ix-events="weekday-label">
+        Thu
+      </div>
+      <div class="calendar_weekdays_item u-text-style-small" data-ix-events="weekday-label">
+        Fri
+      </div>
+      <div class="calendar_weekdays_item u-text-style-small" data-ix-events="weekday-label">
+        Sat
+      </div>
+    </div>
+
+    <!-- 7 day-cells only — build one, duplicate 6 times. -->
+    <div class="calendar_grid is-range-week" data-ix-events="grid">
+      <div class="calendar_day_wrap is-range-week" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">9</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap is-range-week" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">10</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap is-range-week" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">11</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap is-range-week" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">12</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap is-range-week" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">13</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap is-range-week" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">14</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+      <div class="calendar_day_wrap is-range-week" data-ix-events="day-cell">
+        <div class="calendar_day_number" data-ix-events="day-number">15</div>
+        <div class="calendar_day_pills" data-ix-events="day-pills"></div>
+        <button type="button" class="calendar_day_more" data-ix-events="day-more"></button>
+      </div>
+    </div>
+
+    <div class="calendar_loading is-active" data-ix-events="loading">
+      <div class="calendar_loading_text u-text-style-small">Loading events…</div>
+    </div>
+
+    <div class="calendar_demo_note" data-ix-events="demo-note">
+      <div class="calendar_demo_note_text">
+        No events data source found on this page — showing sample data.
+      </div>
+    </div>
+
+    <!-- Hover card. TODO: same as Part 2 — wrap [data-ix-events="hover-card"]
+         in a Webflow Collection List bound to the Events collection, in
+         this same position. -->
+    <div class="calendar_hover_cards" data-ix-events="hover-cards">
+      <div
+        class="calendar_hover_card_wrap"
+        data-ix-events="hover-card"
+        data-ix-events-slug="{{wf:Slug}}"
+      >
+        <div class="calendar_hover_card_img"></div>
+        <div class="calendar_hover_card_content u-margin-trim">
+          <div class="calendar_hover_card_title u-text-style-h6" data-ix-events="name"></div>
+          <div
+            class="calendar_hover_card_meta u-text-style-small"
+            data-ix-events="date"
+            data-ix-events-date-format="FULLDATE"
+          ></div>
+          <div class="calendar_hover_card_meta u-text-style-small" data-ix-events="location"></div>
+          <div
+            class="calendar_hover_card_text u-text-style-small"
+            data-ix-events="short-description"
+          ></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="calendar_hidden u-display-none">
+      <button
+        type="button"
+        class="calendar_nav_today_wrap is-disabled"
+        aria-hidden="true"
+        tabindex="-1"
+      ></button>
+
+      <a href="#" class="calendar_pill_wrap" data-ix-events="calendar-pill">
+        <div class="calendar_pill_name u-text-style-small" data-ix-events="name"></div>
+        <div
+          class="calendar_pill_date u-text-style-small"
+          data-ix-events="date"
+          data-ix-events-date-format="h:mma"
+        ></div>
+      </a>
+
+      <div class="calendar_pill_spacer" data-ix-events="calendar-pill-spacer"></div>
+    </div>
+  </div>
+</div>

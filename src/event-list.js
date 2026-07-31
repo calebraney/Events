@@ -1,6 +1,16 @@
-import { attr } from './utilities';
+import { attr, uniquifyIds } from './utilities';
 import { getOccurrences, parseEventFromJSON } from './recurrence';
 import { whenEvents } from './event-data';
+import {
+  startOfDay,
+  anchorFor,
+  getRangeBounds,
+  stepCurrent,
+  stepPeriodEnd,
+  formatOccurrenceDate,
+  formatWeekLabel,
+  setDateFields,
+} from './date-utils';
 
 // ============================================================================
 // event-list: List View (month/week) and Feed View (linear, upcoming-only)
@@ -188,7 +198,6 @@ const LABEL = '[data-ix-events="label"]';
 const ITEM = '[data-ix-events="item"]';
 const DATA_EL = '[data-ix-events="data"]';
 const CARD_EL = '[data-ix-events="card"]';
-const DATE_EL = '[data-ix-events="date"]';
 const SLUG_ATTR = 'data-ix-events-slug';
 const CLONE_ATTR = 'data-ix-events-clone';
 const DISABLED_CLASS = 'is-disabled';
@@ -197,14 +206,6 @@ const LOAD_MORE_BTN = '[data-ix-events="load-more"]';
 const FEED_DIVIDER_EL = '[data-ix-events="feed-divider"]';
 const FEED_DIVIDER_TEXT_EL = '[data-ix-events="feed-divider-text"]';
 const FEED_SEARCH_CAP = 36; // safety cap on how many extra period-steps Load More will search before giving up
-
-const DOW_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const DOW_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const MONTH_FULL = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
 
 // ── List View ────────────────────────────────────────────────────────────
 
@@ -604,178 +605,7 @@ function createOccurrenceCard(templateItem, occurrence, event, suffix) {
   return clone;
 }
 
-// ── Shared date helpers ─────────────────────────────────────────────────
-
-function startOfDay(date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
-}
-
-function addDays(date, n) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + n);
-}
-
-function startOfWeek(date, weekStartDay) {
-  const diff = (date.getDay() - weekStartDay + 7) % 7;
-  return addDays(date, -diff);
-}
-
-// The anchor date for a range: the 1st of the month, or the first day of the
-// week (per weekStartDay). Used both to seed `current` and by the "today" button.
-function anchorFor(date, range, weekStartDay) {
-  return range === 'week' ? startOfWeek(date, weekStartDay) : new Date(date.getFullYear(), date.getMonth(), 1);
-}
-
-// `current` is always an anchor date (see anchorFor) — this expands it to the
-// actual [start, end] window passed to getOccurrences().
-function getRangeBounds(current, range) {
-  if (range === 'week') {
-    const weekEnd = addDays(current, 6);
-    return { start: current, end: new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate(), 23, 59, 59) };
-  }
-  return {
-    start: current,
-    end: new Date(current.getFullYear(), current.getMonth() + 1, 0, 23, 59, 59),
-  };
-}
-
-function stepCurrent(current, range, direction) {
-  if (range === 'week') return addDays(current, 7 * direction);
-  const next = new Date(current.getFullYear(), current.getMonth(), 1);
-  next.setMonth(next.getMonth() + direction);
-  return next;
-}
-
-// Extends a date forward by one Feed View "period" step (month or week) —
-// used only to grow Load More's search window, not tied to any calendar
-// week/month boundary the way List View's range stepping is. Always pins to
-// the 1st of the month first (matching stepCurrent's month-safe pattern) to
-// avoid rollover bugs (e.g. Jan 31 + 1 month landing in March).
-function stepPeriodEnd(date, period) {
-  if (period === 'week') return addDays(date, 7);
-  const next = new Date(date.getFullYear(), date.getMonth(), 1);
-  next.setMonth(next.getMonth() + 1);
-  return next;
-}
-
-// Formats the occurrence's date fields — for a recurring event this is the
-// computed date/time of THAT occurrence itself, never the event's original
-// CMS start/end, so a "FULLDATE" range or the plain token formatter both
-// naturally reflect the right day even when recurring.
-function setDateFields(root, occurrence, event) {
-  root.querySelectorAll(DATE_EL).forEach((el) => {
-    const format = attr('MMMM D, YYYY', el.getAttribute('data-ix-events-date-format'));
-    el.textContent = isFullDateFormat(format)
-      ? formatFullDate(occurrence, event)
-      : formatOccurrenceDate(occurrence.start, format);
-  });
-}
-
-const pad2 = (n) => String(n).padStart(2, '0');
-const ordinal = (n) => {
-  if (n % 10 === 1 && n % 100 !== 11) return `${n}st`;
-  if (n % 10 === 2 && n % 100 !== 12) return `${n}nd`;
-  if (n % 10 === 3 && n % 100 !== 13) return `${n}rd`;
-  return `${n}th`;
-};
-
-// Moment-style date format tokens — the same vocabulary Webflow's own Date
-// field formatting UI uses, so any preset or custom-built combination from
-// that picker works here unchanged. Order matters: longer tokens must be
-// tried before their shorter prefixes (MMMM before MMM before MM before M, etc).
-const DATE_FORMAT_TOKEN = /YYYY|YY|MMMM|MMM|MM|M|DD|Do|D|dddd|ddd|mm|H|h|A|a/g;
-
-function formatOccurrenceDate(date, format) {
-  const hours = date.getHours();
-
-  const tokens = {
-    YYYY: () => String(date.getFullYear()),
-    YY: () => String(date.getFullYear()).slice(-2),
-    MMMM: () => MONTH_FULL[date.getMonth()],
-    MMM: () => MONTH_SHORT[date.getMonth()],
-    MM: () => pad2(date.getMonth() + 1),
-    M: () => String(date.getMonth() + 1),
-    DD: () => pad2(date.getDate()),
-    Do: () => ordinal(date.getDate()),
-    D: () => String(date.getDate()),
-    dddd: () => DOW_FULL[date.getDay()],
-    ddd: () => DOW_SHORT[date.getDay()],
-    mm: () => pad2(date.getMinutes()),
-    H: () => String(hours),
-    h: () => String(hours % 12 || 12),
-    A: () => (hours >= 12 ? 'PM' : 'AM'),
-    a: () => (hours >= 12 ? 'pm' : 'am'),
-  };
-
-  return format.replace(DATE_FORMAT_TOKEN, (match) => tokens[match]());
-}
-
-// Label for range="week": `current` is the anchor (the week's first day, per
-// weekStartDay). No override → a smart default that always spells out the
-// month on both ends and adds the start year too when the week crosses a
-// year boundary, so it stays unambiguous ("Aug 3 - Aug 9, 2026",
-// "Dec 29, 2025 - Jan 4, 2026"). With an override, the same format string is
-// applied to both ends and joined with " - ".
-function formatWeekLabel(current, format) {
-  const end = addDays(current, 6);
-  if (format) {
-    return `${formatOccurrenceDate(current, format)} - ${formatOccurrenceDate(end, format)}`;
-  }
-  const crossesYear = current.getFullYear() !== end.getFullYear();
-  const startFormat = crossesYear ? 'MMM D, YYYY' : 'MMM D';
-  return `${formatOccurrenceDate(current, startFormat)} - ${formatOccurrenceDate(end, 'MMM D, YYYY')}`;
-}
-
-function isFullDateFormat(format) {
-  return format.trim().toUpperCase() === 'FULLDATE';
-}
-
-// "FULLDATE": a composite format driven by the event's Show Start Time / Show
-// End Time / Show End Date flags rather than a token string, e.g.:
-//   "June 14th"                    (all three off)
-//   "June 14th at 8pm"             (start time only)
-//   "June 14th, 8-9pm"             (start + end time)
-//   "June 14-16th, 12pm-5pm"       (+ end date, spans multiple days)
-// A shared meridiem is only dropped from the start time when it wouldn't be
-// ambiguous — kept on 12 (noon/midnight) even if the end time matches it.
-function formatFullDate(occurrence, event) {
-  const { start, end } = occurrence;
-  const { showStartTime, showEndTime, showEndDate } = event;
-
-  const isMultiDay = showEndDate && startOfDay(end) !== startOfDay(start);
-  const datePart = isMultiDay ? formatDateRange(start, end) : formatSingleDate(start);
-
-  if (!showStartTime) return datePart;
-  if (!showEndTime) return `${datePart} at ${formatClockTime(start)}`;
-
-  const startTime = formatClockTime(start);
-  const endTime = formatClockTime(end);
-  const startPeriod = start.getHours() >= 12 ? 'pm' : 'am';
-  const endPeriod = end.getHours() >= 12 ? 'pm' : 'am';
-  const start12Hour = start.getHours() % 12 || 12;
-  const hideStartPeriod = startPeriod === endPeriod && start12Hour !== 12;
-  const startTimeText = hideStartPeriod ? startTime.slice(0, -2) : startTime;
-
-  return `${datePart}, ${startTimeText}-${endTime}`;
-}
-
-function formatSingleDate(date) {
-  return `${MONTH_FULL[date.getMonth()]} ${ordinal(date.getDate())}`;
-}
-
-function formatDateRange(start, end) {
-  const sameMonth = start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear();
-  if (sameMonth) return `${MONTH_FULL[start.getMonth()]} ${start.getDate()}-${ordinal(end.getDate())}`;
-  return `${formatSingleDate(start)} - ${formatSingleDate(end)}`;
-}
-
-function formatClockTime(date) {
-  const hours = date.getHours();
-  const minutes = date.getMinutes();
-  const h12 = hours % 12 || 12;
-  const period = hours >= 12 ? 'pm' : 'am';
-  const minuteText = minutes === 0 ? '' : `:${pad2(minutes)}`;
-  return `${h12}${minuteText}${period}`;
-}
+// ── Finsweet quirk workaround ───────────────────────────────────────────
 
 // Finsweet's own render step applies an inline hidden style to List View's
 // clone elements at some point after they're created — confirmed live via
@@ -793,19 +623,4 @@ function watchAndUnhide(el) {
     if (el.style.display === 'none') el.style.display = '';
   });
   observer.observe(el, { attributes: true, attributeFilter: ['style'] });
-}
-
-// Duplicating a Collection Item for a recurring occurrence duplicates any
-// `id`/`data-w-id` it carries. Duplicate `id`s break getElementById/aria-*
-// lookups; duplicate `data-w-id`s can make Webflow's native Interactions
-// panel misfire across instances. Strip both from clones.
-function uniquifyIds(root, suffix) {
-  if (root.hasAttribute('id')) root.id = `${root.id}-${suffix}`;
-  root.removeAttribute('data-w-id');
-  root.querySelectorAll('[id]').forEach((el) => {
-    el.id = `${el.id}-${suffix}`;
-  });
-  root.querySelectorAll('[data-w-id]').forEach((el) => {
-    el.removeAttribute('data-w-id');
-  });
 }
