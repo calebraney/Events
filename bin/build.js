@@ -15,6 +15,9 @@ const context = await esbuild.context({
   // sourcemap: !PRODUCTION, //Creates a map of the source files for debugging
   target: PRODUCTION ? 'es2020' : 'esnext',
   inject: LIVE_RELOAD ? ['./bin/live-reload.js'] : undefined,
+  define: {
+    __DEV__: JSON.stringify(!PRODUCTION),
+  },
 });
 
 //watch the file

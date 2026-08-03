@@ -8,7 +8,7 @@ A reusable Webflow events system built by Caleb Raney: recurring-event CMS logic
 - **`event-list.js`** — List View (`data-ix-events-layout="list"`) and Feed View (`data-ix-events-layout="feed"`). Both expand/filter a native Webflow Collection List in place; List View shows a fixed month/week window with prev/next stepping, Feed View is a linear, always-upcoming list that grows via a "Load More" button.
 - **`calendar.js`** — a month/week-grid Calendar (`data-ix-events-layout="calendar"`), built entirely from Webflow-authored elements — the Designer builds every visual piece (grid, day cells, pills, hover card), and the script only supplies dates/data and positions the pill layer.
 
-Any combination of these views can live on the same page and will read the same event data automatically.
+Any combination of these views can live on the same page and will read the same event data automatically — see [Shared data source markup](#shared-data-source-markup) (§1) for exactly how each instance resolves which data source that is.
 
 ---
 
@@ -43,7 +43,7 @@ Every view reads the same `events` CMS collection through one hidden JSON payloa
 | End Date/Time                                                   | Date/Time           | This occurrence's own end. For a non-recurring event: its plain end date/time. For a recurring event: only its **time-of-day** and **day offset from Start Date** are reused (see Recurring Days note below) — reapplied to every generated occurrence, so a recurring multi-day event (e.g. "the first Saturday–Sunday of every month") still spans the right number of days each time. Leave unset for a same-day, same-time event. |
 | **Recurring End Date**                                          | Date only           | The recurring series cutoff — the last day an occurrence can start on. Independent of End Date/Time. Leave empty for an indefinitely recurring event; if set at all (even to Start Date's own day), the series stops there.                                                                                                                                                                                                           |
 | Show Start Time / Show End Time / Show End Date                 | Switch              | Drive the `FULLDATE` composite format (see below) — not read anywhere else.                                                                                                                                                                                                                                                                                                                                                           |
-| Recurring Frequency                                             | Option              | `None`, `Daily`, `Weekly`, `Monthly (same date)`, `Monthly (same day of the week)`, `Yearly`. Unset/empty is treated as `None`.                                                                                                                                                                                                                                                                                                       |
+| Recurring Frequency                                             | Option              | `Daily`, `Weekly`, `Monthly (same date)`, `Monthly (same day of the week)`, `Yearly`. Not required — leave it unset for a non-recurring event (this also makes it easy to filter on natively in Webflow: "is set" instead of "is set or equals None").                                                                                                                                                                            |
 | Recurring Interval                                              | Number, default `1` | "Every N [frequency units]" — e.g. Weekly + interval `2` = biweekly. Unset or `-1` is treated as `1`.                                                                                                                                                                                                                                                                                                                                 |
 | Recurring Days                                                  | Plain text          | CSV of weekday abbreviations, e.g. `Tue,Thu`. Only read when Frequency = Weekly; empty = use Start Date's own weekday. When set, each listed weekday becomes its own single-day occurrence and End Date/Time's day-offset is ignored (its time-of-day still applies).                                                                                                                                                                 |
 | Recurring Skip Dates                                            | Plain text          | CSV of `YYYY-MM-DD` dates to exclude from the series.                                                                                                                                                                                                                                                                                                                                                                                 |
@@ -81,15 +81,21 @@ Dynamo renders `Start Date/Time`/`End Date/Time` as `"YYYY-MM-DD h:mm a"` and `R
 
 ### Shared data source markup
 
-Place this **once**, anywhere on the page — it's the single source every view on the same page will read:
-
 ```
 [data-ix-events="data-wrap"]     the Collection List
   [data-ix-events="item"]          one per CMS item
     [data-ix-events="data"]          the <script type="application/json"> above
 ```
 
-This can be the same Collection List that also displays the List View's cards (see Combined mode below), or a separate, invisible one used purely as a data source (recommended).
+This can be the same Collection List that also displays a view's cards (see Combined mode below), or a separate, invisible one used purely as a data source (recommended).
+
+**Where to put it**: each `[data-ix-events="wrap"]` resolves its own data source independently — no attribute to set for the common case:
+
+1. A `data-wrap` nested **inside** that specific wrap — a local override, used if present, no matter what else exists on the page.
+2. Otherwise, the first `data-wrap` anywhere on the page that isn't nested inside *any* wrap (a genuinely page-level one) — a shared fallback every wrap without its own local source uses.
+3. Neither found — a console warning, and that instance gets no events.
+
+In practice: for a typical page, place **one** `data-wrap` outside every wrap and every view reads it — that's the whole "shared data source" setup, no per-instance configuration needed. If one specific instance needs its own, smaller or differently-filtered set of events (e.g. a widget that should only ever show a pre-filtered subset), just nest a `data-wrap` inside *that instance's own wrap* — it'll use its own local one and ignore the page-level source entirely, with no attribute anywhere signaling the override; it's purely a matter of where you put it in the Designer's layer tree.
 
 ---
 
@@ -130,11 +136,13 @@ Webflow only renders a Collection List's first ~100 items natively. To go beyond
 | `data-ix-events="data"`                                  | `<script type="application/json">` inside each item | Combined mode only           | The item's own event JSON (see §1).                                                           |
 | `data-ix-events-slug="{{wf:Slug}}"`                      | Item, Separate mode                                 | Separate mode only           | Binds this card to its event data by slug — see below.                                        |
 | `data-ix-events="date"`                                  | Any text element inside the card                    | No (needed to display dates) | JS replaces its text content with the occurrence's formatted date — see format options below. |
+| `data-ix-events="load-more-wrap"`                        | Wrapper, anywhere inside wrap                        | No, only used when `item-count` is set | Optional ancestor of `load-more` (see below) — if present, this whole wrapper is what's shown/hidden. |
+| `data-ix-events="load-more"`                             | A button, inside `load-more-wrap` if present, otherwise anywhere inside wrap | No, only used when `item-count` is set | Reveals the next batch of occurrences within the active range — see `data-ix-events-item-count` below. |
 
 **Combined vs. Separate mode** (auto-detected per item — the two can even be mixed on the same page):
 
 - **Combined** — the same Collection List holds both the JSON data and the visible card. Each item carries both `[data-ix-events="data"]` and `[data-ix-events="card"]`.
-- **Separate** — the cards are their own Collection List (bound to the same `events` collection), nested wherever you want in the wrap. Each item skips the JSON and instead carries `data-ix-events-slug="{{wf:Slug}}"`, matched against the page's shared `[data-ix-events="data-wrap"]` (§1) by slug.
+- **Separate** — the cards are their own Collection List (bound to the same `events` collection), nested wherever you want in the wrap. Each item skips the JSON and instead carries `data-ix-events-slug="{{wf:Slug}}"`, matched against this wrap's resolved `[data-ix-events="data-wrap"]` (§1) by slug.
 
 ### Option attributes (all on the `wrap` element)
 
@@ -144,6 +152,7 @@ Webflow only renders a Collection List's first ~100 items natively. To go beyond
 | `data-ix-events-range`               | `month` \| `week`    | `month`  | The size of window prev/next/today step through, and what `getOccurrences()` is queried against. Invalid/unset values normalize to `month`.                                                                |
 | `data-ix-events-week-start`          | `sunday` \| `monday` | `sunday` | Only consulted when `range="week"` — which day a week starts on.                                                                                                                                           |
 | `data-ix-events-hide-past-events`    | `true` \| `false`    | `false`  | `true` excludes occurrences that have already ended from what's shown. For a recurring event this is per-occurrence — only its past occurrences are hidden, future ones in the same active range still show. With `duplicate-recurring="false"`, the single card still shows as long as at least one occurrence in the active range hasn't ended yet. Also disables the `prev` and `today` buttons (see Element attributes above) once there's nowhere non-past left to navigate to. |
+| `data-ix-events-item-count`          | number               | unset    | Unset (default) — no limit, every occurrence in the active range shows at once, same as before this option existed. Set it (e.g. `9`) to instead reveal only the first N occurrence-cards — chronologically, across every event in the active range, not per event — with a `load-more` button revealing N more per click. The button (or its `load-more-wrap`, if present) is only shown while more remain in the active range. The revealed count resets back to N every time the range changes (prev/next/today). Shares its name and meaning with Feed View's option of the same name. |
 
 All `true`/`false` values above are case-insensitive (`"True"`, `"FALSE"`, etc. all work).
 
@@ -233,7 +242,8 @@ None beyond the shared data source (§1) and Combined/Separate card setup (same 
 | Attribute                              | Applied to                       | Required            | Purpose                                                                                                                                                                                          |
 | --------------------------------------- | --------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `data-ix-events="wrap"` + `data-ix-events-layout="feed"` | Component root       | Yes                  | Marks this element as a Feed View instance. Every option below is read from this element.                                                                                                       |
-| `data-ix-events="load-more"`            | A button, anywhere inside wrap    | No                   | Reveals the next batch of upcoming occurrences.                                                                                                                                                  |
+| `data-ix-events="load-more-wrap"`       | Wrapper, anywhere inside wrap      | No                   | Optional ancestor of `load-more` — if present, this whole wrapper is what's shown/hidden instead of the button itself.                                                                          |
+| `data-ix-events="load-more"`            | A button, inside `load-more-wrap` if present, otherwise anywhere inside wrap | No | Reveals the next batch of upcoming occurrences.                                                                                                                                                  |
 | `data-ix-events="item"` / `"card"` / `"data"`, `data-ix-events-slug` | Collection List item + children | Yes (same as List View) | Same Combined/Separate mode contract as List View — see above.                                                                                                                    |
 | `data-ix-events="date"`                 | Any text element inside the card  | No (needed to display dates) | Same as List View, including `FULLDATE` — see [Format attributes](#format-attributes) above.                                                                                          |
 | `data-ix-events="feed-divider"`         | A standalone element, sibling of the card Collection List (not inside it) | No | Divider template. Give it Lumos's `u-hide` class in the Designer so it's invisible in its authored position — each inserted copy has that class removed (an inline style override can't reliably win against a typically-`!important` hide class). One is inserted automatically before the very first card in the feed, and again at every month boundary after that. If the card container is a CSS grid (multi-column feed), each divider automatically gets `grid-column: 1 / -1` so it spans every column as a full-width row — no CSS setup needed on your end, and a no-op for single-column/flex feeds. |
@@ -244,7 +254,7 @@ None beyond the shared data source (§1) and Combined/Separate card setup (same 
 | Attribute                          | Values            | Default | Purpose                                                                                                                                                                                                          |
 | ----------------------------------- | ----------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `data-ix-events-duplicate-recurring` | `true` \| `false` | `true`  | Same meaning as List View — `false` caps each event to its single next upcoming occurrence.                                                                                                                     |
-| `data-ix-events-feed-count`          | number             | `12`    | How many occurrence-cards to reveal on init and per `Load More` click.                                                                                                                                          |
+| `data-ix-events-item-count`          | number             | `12`    | How many occurrence-cards to reveal on init and per `Load More` click. Shares its name and meaning with List View's option of the same name — unlike List View, Feed always has a limit (its range is unbounded going forward, so "show everything" isn't an option). **Renamed from `data-ix-events-feed-count`** — existing instances need updating. |
 | `data-ix-events-feed-period`         | `month` \| `week`  | `month` | The granularity `Load More`'s internal search expands by when looking for enough occurrences to fill a batch. Doesn't change what's shown — only how the search is chunked internally.                        |
 | `data-ix-events-feed-divider`        | `true` \| `false`  | `true`  | Enables inserting month-divider elements, including the very first one (marking the current month, before the first card). Requires a `[data-ix-events="feed-divider"]` element in the wrap.                  |
 | `data-ix-events-feed-divider-today`  | `true` \| `false`  | `false` | Only meaningful when `feed-divider` is `true`. Overrides the text of that very first divider to the literal word "Today" instead of the current month's formatted label. No effect if `feed-divider` is `false`. |
@@ -255,7 +265,7 @@ None beyond the shared data source (§1) and Combined/Separate card setup (same 
 
 ### Load More behavior
 
-Each click reveals the next `feed-count` occurrences, searched chronologically forward from today across every event (recurring events contribute one card per upcoming occurrence, same as List View with `duplicate-recurring="true"`). The button hides/disables itself once there are no more upcoming occurrences to reveal — including on a feed with genuinely nothing left, or after searching up to 3 years forward (month period) / ~8 months forward (week period) without finding a full batch, whichever search granularity is configured.
+Each click reveals the next `item-count` occurrences, searched chronologically forward from today across every event (recurring events contribute one card per upcoming occurrence, same as List View with `duplicate-recurring="true"`). The button (or its `load-more-wrap`, if present) hides itself once there are no more upcoming occurrences to reveal — including on a feed with genuinely nothing left, or after searching up to 3 years forward (month period) / ~8 months forward (week period) without finding a full batch, whichever search granularity is configured.
 
 ---
 
@@ -300,7 +310,7 @@ A working reference build lives at [`design/calendar-mockup.html`](design/calend
 | `data-ix-events="show-start-time"` | Show Start Time (`"true"`/`"false"`) |
 | `data-ix-events="show-end-time"` | Show End Time (`"true"`/`"false"`) |
 | `data-ix-events="show-end-date"` | Show End Date (`"true"`/`"false"`) |
-| `data-ix-events="recurring-frequency"` | Recurring Frequency (e.g. `"Weekly"`, or `"None"`) |
+| `data-ix-events="recurring-frequency"` | Recurring Frequency (e.g. `"Weekly"`, or blank for a non-recurring event) |
 | `data-ix-events="recurring-interval"` | Recurring Interval |
 | `data-ix-events="recurring-days"` | Recurring Days, comma-joined (e.g. `"Tue, Thu"`) |
 | `data-ix-events="recurring-skip-dates"` | Recurring Skip Dates, comma-joined |
@@ -403,4 +413,4 @@ Override any of these per-instance by setting the same custom property directly 
 ## Notes
 
 - No run gates (`-site-run` / `-page-run` / `-run`) and no breakpoint disabling — every view is functional, not decorative, so it always runs if its elements/attributes are present.
-- Any combination of List View, Feed View, and Calendar can coexist on the same page (e.g. a layout toggle) and will read the same `[data-ix-events="data-wrap"]` source — no risk of them drifting apart.
+- Any combination of List View, Feed View, and Calendar can coexist on the same page (e.g. a layout toggle) and will, by default, read the same page-level `[data-ix-events="data-wrap"]` source — no risk of them drifting apart, unless one instance deliberately opts into its own local data-wrap (see §1).

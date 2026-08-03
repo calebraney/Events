@@ -1,4 +1,4 @@
-import { attr, uniquifyIds } from './utilities';
+import { attr, uniquifyIds, debugLog } from './utilities';
 import { getOccurrences } from './recurrence';
 import { whenEvents } from './event-data';
 import { startOfDay, addDays, anchorFor, getRangeBounds, stepCurrent, formatOccurrenceDate, formatWeekLabel, setDateFields } from './date-utils';
@@ -12,8 +12,9 @@ import { startOfDay, addDays, anchorFor, getRangeBounds, stepCurrent, formatOccu
 // only supplies dates/data and appends pills into normal document flow. See
 // design/calendar-mockup.html for a reference build and plan §9
 // (gentle-singing-tome.md) for the design rationale. Reads event data
-// through event-data.js's whenEvents(), the same page-wide
-// [data-ix-events="data-wrap"] lookup event-list.js uses.
+// through event-data.js's whenEvents(wrap, callback) — the same
+// local-data-wrap-first-then-page-level-fallback lookup event-list.js uses,
+// scoped to this specific instance's own wrap.
 //
 // Required structure per instance (see the mockup for the full markup):
 //   [data-ix-events="wrap"] [data-ix-events-layout="calendar"]
@@ -174,7 +175,7 @@ const PILL_TEXT_FIELDS = {
   'show-start-time': (event) => String(event.showStartTime),
   'show-end-time': (event) => String(event.showEndTime),
   'show-end-date': (event) => String(event.showEndDate),
-  'recurring-frequency': (event) => event.recurringFrequency,
+  'recurring-frequency': (event) => (event.recurringFrequency === 'None' ? '' : event.recurringFrequency),
   'recurring-interval': (event) => String(event.recurringInterval),
   'recurring-days': (event) => event.recurringDays.join(', '),
   'recurring-skip-dates': (event) => event.recurringSkipDates.join(', '),
@@ -186,7 +187,7 @@ export const calendar = function () {
   const wraps = [...document.querySelectorAll(WRAP)].filter(
     (wrap) => wrap.getAttribute('data-ix-events-layout') === LAYOUT
   );
-  console.log('[calendar] DEBUG wraps with layout="calendar" found:', wraps.length, wraps);
+  debugLog('[calendar] wraps with layout="calendar" found:', wraps.length, wraps);
   if (wraps.length === 0) return;
 
   wraps.forEach((wrap) => initCalendar(wrap));
@@ -222,12 +223,7 @@ function initCalendar(wrap) {
   const loadingEl = wrap.querySelector(LOADING);
   const demoNoteEl = wrap.querySelector(DEMO_NOTE);
   const hoverCardsBySlug = buildHoverCardMap(wrap);
-  console.log(
-    '[calendar] DEBUG hover-cards found:',
-    hoverCardsBySlug.size,
-    '| slugs:',
-    [...hoverCardsBySlug.keys()]
-  );
+  debugLog('[calendar] hover-cards found:', hoverCardsBySlug.size, '| slugs:', [...hoverCardsBySlug.keys()]);
   if (hoverCardsBySlug.size === 0) {
     console.warn(
       'calendar: no [data-ix-events="hover-card"] elements with a resolved data-ix-events-slug were found — hover cards will never show for this instance. If you haven\'t yet wrapped the hover-card template in a live Webflow Collection List bound to your Events collection (see the TODO comment in the mockup), that\'s almost certainly why — the un-wired template only carries the literal, unresolved "{{wf:Slug}}" text.',
@@ -350,8 +346,8 @@ function initCalendar(wrap) {
     refresh();
   });
 
-  whenEvents((events) => {
-    console.log('[calendar] DEBUG whenEvents callback fired, events received:', events.length, events);
+  whenEvents(wrap, (events) => {
+    debugLog('[calendar] whenEvents callback fired, events received:', events.length, events);
     const usedDemo = events.length === 0;
     state.events = usedDemo ? demoEvents() : events;
     loadingEl?.classList.remove('is-active');
@@ -498,7 +494,7 @@ function showHoverCard(card, occurrence, event, pillEl, wrap) {
   const showBelow = targetRect.top < window.innerHeight / 2;
   const top = showBelow ? targetRect.bottom - parentRect.top + gap : targetRect.top - parentRect.top - cardRect.height - gap;
 
-  console.log('[calendar] DEBUG showHoverCard — event:', event.name, '| left:', left, '| top:', top, '| showBelow:', showBelow, '| parent:', parent);
+  debugLog('[calendar] showHoverCard — event:', event.name, '| left:', left, '| top:', top, '| showBelow:', showBelow, '| parent:', parent);
 
   card.style.left = `${left}px`;
   card.style.top = `${top}px`;
@@ -682,7 +678,7 @@ function renderGrid({
       const card = hoverCardsBySlug.get(seg.event.slug);
       if (!card) unmatchedSlugs.add(seg.event.slug);
       pill.addEventListener('mouseenter', () => {
-        console.log('[calendar] DEBUG pill mouseenter — event:', seg.event.name, '| slug:', seg.event.slug, '| card found:', !!card);
+        debugLog('[calendar] pill mouseenter — event:', seg.event.name, '| slug:', seg.event.slug, '| card found:', !!card);
         if (!card) return;
         // Force-hide whatever was previously shown first — a defensive
         // guarantee that at most one card is ever visible, even if some
@@ -696,7 +692,7 @@ function renderGrid({
         showHoverCard(card, seg.occurrence, seg.event, pill, wrap);
       });
       pill.addEventListener('mouseleave', () => {
-        console.log('[calendar] DEBUG pill mouseleave — event:', seg.event.name);
+        debugLog('[calendar] pill mouseleave — event:', seg.event.name);
         hideHoverCard(card);
         if (hoverState.activeCard === card) hoverState.activeCard = null;
       });

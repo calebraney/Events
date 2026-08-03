@@ -1,3 +1,8 @@
+// Dev-only logging — `__DEV__` is set by esbuild's `define` in bin/build.js
+// (true for `npm run dev`, false for `npm run build`), so these calls are
+// stripped from the minified production bundle without touching call sites.
+export const debugLog = __DEV__ ? console.log.bind(console) : () => {};
+
 // attribute value checker
 export const attr = function (defaultVal, attrVal) {
   //get the type of the default

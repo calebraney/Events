@@ -18,6 +18,10 @@
 //     recurringEndDate: Date | null, // series cutoff — see note below, only used when recurring
 //     recurringFrequency: 'None' | 'Daily' | 'Weekly' | 'Monthly (same date)'
 //                        | 'Monthly (same day of the week)' | 'Yearly',
+//                        // 'None' is this module's own normalized value for
+//                        // "not recurring" — the CMS Option field has no
+//                        // "None" choice, an editor just leaves it blank.
+//                        // parseEventFromJSON() maps blank/unset to 'None'.
 //     recurringInterval: number,     // every N [frequency units], >= 1
 //     recurringDays: string[],       // e.g. ['Tue','Thu'], only used when Weekly
 //     recurringSkipDates: string[],  // 'YYYY-MM-DD' strings

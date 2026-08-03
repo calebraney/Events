@@ -1,4 +1,4 @@
-import { attr, uniquifyIds } from './utilities';
+import { attr, uniquifyIds, debugLog } from './utilities';
 import { getOccurrences, parseEventFromJSON } from './recurrence';
 import { whenEvents } from './event-data';
 import {
@@ -18,9 +18,14 @@ import {
 // ============================================================================
 //
 // Both views share the same data-ix-events-* attribute prefix as calendar.js
-// — all three read event data through event-data.js's whenEvents(), which
-// finds the one [data-ix-events="data-wrap"] Collection List on the page, so
-// switching layouts on one page can't end up reading two different sources.
+// — all three read event data through event-data.js's whenEvents(wrap,
+// callback), called once per wrap. Resolution per wrap: a
+// [data-ix-events="data-wrap"] nested inside it wins if present; otherwise
+// the first page-level one not claimed by (nested inside) any OTHER wrap.
+// This means most pages can use ONE shared data-wrap with zero extra
+// config, while any individual instance can still opt into its own scoped
+// data (e.g. a smaller, pre-filtered Collection List) purely by nesting a
+// data-wrap inside its own wrap — no attribute needed either way.
 //
 // List View delegates its DOM lifecycle (filtering, item creation, render) to
 // Finsweet Attributes' List solution — https://finsweet.com/attributes/list-filter,
@@ -56,7 +61,8 @@ import {
 // Cards can live in EITHER of two places, auto-detected per item (both views):
 //
 // A) Combined — the same Collection List that holds the JSON data also
-//    holds the card (i.e. IS the page's [data-ix-events="data-wrap"]):
+//    holds the card (i.e. IS the resolved [data-ix-events="data-wrap"] —
+//    local or page-level, see the resolution rule above):
 //      [data-ix-events="item"]
 //        [data-ix-events="data"]   <script type="application/json"> — raw event fields
 //        [data-ix-events="card"]   the visible card
@@ -106,6 +112,9 @@ import {
 //                                        event's Show Start Time / Show End Time / Show
 //                                        End Date flags, e.g. "June 14th", "June 14th at
 //                                        8pm", "June 14th, 8-9pm", "June 14-16th, 12pm-5pm".
+//     [data-ix-events="load-more-wrap"]  optional — see data-ix-events-item-count below.
+//       [data-ix-events="load-more"]       optional — button, reveals the next
+//                                          batch of occurrences within the active range.
 //
 // Options (all read from the wrap element):
 //   data-ix-events-duplicate-recurring="true" (default) | "false"
@@ -123,6 +132,17 @@ import {
 //     past occurrences are hidden, future ones in the same active range still
 //     show. With duplicate-recurring="false", the single card still shows as
 //     long as at least one occurrence in the active range hasn't ended yet.
+//   data-ix-events-item-count unset (default)
+//     no limit — every occurrence in the active range shows at once, exactly
+//     as before this option existed. Set it (e.g. "9") to instead reveal only
+//     the first N occurrence-cards (chronologically, across every event in
+//     the active range — not per event) with a [data-ix-events="load-more"]
+//     button revealing N more per click. The button (or its optional
+//     [data-ix-events="load-more-wrap"] ancestor, if present — the button is
+//     then looked up INSIDE it) is only shown while more remain, and hidden
+//     again once everything in the active range is visible. The revealed
+//     count resets back to N every time the active range changes (prev/next/
+//     today). Shares its name and meaning with Feed View's option below.
 //
 // ── Feed View ───────────────────────────────────────────────────────────
 //
@@ -135,8 +155,11 @@ import {
 //
 // Required structure per instance:
 //   [data-ix-events="wrap"] [data-ix-events-layout="feed"]   component root (options below live here)
-//     [data-ix-events="load-more"]     optional — button, reveals the next
-//                                        batch of upcoming occurrences
+//     [data-ix-events="load-more-wrap"]  optional — see data-ix-events-item-count below.
+//       [data-ix-events="load-more"]       optional — button, reveals the next
+//                                          batch of upcoming occurrences. If no
+//                                          load-more-wrap is present, this can
+//                                          instead live anywhere inside wrap.
 //     ...the card Collection List (A or B above)...
 //       [data-ix-events="date"]          same as List View, incl. FULLDATE
 //     [data-ix-events="feed-divider"]  optional — divider template element,
@@ -170,8 +193,12 @@ import {
 //   data-ix-events-duplicate-recurring="true" (default) | "false"
 //     same meaning as List View — false caps each event to its single next
 //     upcoming occurrence.
-//   data-ix-events-feed-count="12" (default)
+//   data-ix-events-item-count="12" (default)
 //     how many occurrence-cards to reveal on init and per "Load More" click.
+//     Shares its name and meaning with List View's option above (unlike List
+//     View, Feed always has a limit — there's no "show everything" mode,
+//     since the feed's range is unbounded going forward). Renamed from
+//     data-ix-events-feed-count — existing instances need updating.
 //   data-ix-events-feed-period="month" (default) | "week"
 //     the granularity Load More's internal search expands by when looking
 //     for enough occurrences to fill a batch. Doesn't change what's shown,
@@ -202,6 +229,7 @@ const SLUG_ATTR = 'data-ix-events-slug';
 const CLONE_ATTR = 'data-ix-events-clone';
 const DISABLED_CLASS = 'is-disabled';
 const FS_LIST_SELECTOR = '[fs-list-element="list"]';
+const LOAD_MORE_WRAP = '[data-ix-events="load-more-wrap"]';
 const LOAD_MORE_BTN = '[data-ix-events="load-more"]';
 const FEED_DIVIDER_EL = '[data-ix-events="feed-divider"]';
 const FEED_DIVIDER_TEXT_EL = '[data-ix-events="feed-divider-text"]';
@@ -213,19 +241,22 @@ export const eventList = function () {
   const wraps = [...document.querySelectorAll(WRAP)].filter(
     (wrap) => wrap.getAttribute('data-ix-events-layout') === LIST_LAYOUT
   );
-  console.log('[event-list] DEBUG wraps with layout="list" found:', wraps.length, wraps);
+  debugLog('[event-list] wraps with layout="list" found:', wraps.length, wraps);
   if (wraps.length === 0) return;
 
-  // Needed for slug matching in the separate-Collection-List case (B).
-  // Combined-mode items (A) never need this, since they carry their own JSON.
-  whenEvents((events) => {
-    console.log('[event-list] DEBUG whenEvents callback fired, events received:', events.length, events);
-    const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
+  // whenEvents is now called per-wrap (not once, shared) — each wrap can
+  // resolve to its own local data-wrap, or fall back to the same page-level
+  // one, per event-data.js's resolution rule. Needed for slug matching in
+  // the separate-Collection-List case (B); combined-mode items (A) never
+  // need this, since they carry their own JSON.
+  wraps.forEach((wrap) => {
+    whenEvents(wrap, (events) => {
+      debugLog('[event-list] whenEvents callback fired, events received:', events.length, events);
+      const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
 
-    wraps.forEach((wrap) => {
       whenListReady(wrap, true, (listInstance) => {
         const config = buildListConfig(wrap, listInstance.listElement, eventsBySlug);
-        console.log('[event-list] DEBUG config built for wrap:', wrap, '-> ', config);
+        debugLog('[event-list] config built for wrap:', wrap, '-> ', config);
         if (!config) return;
         initList(config, listInstance);
       });
@@ -245,41 +276,76 @@ function buildListConfig(wrap, list, eventsBySlug) {
   const prevBtn = wrap.querySelector(PREV_BTN);
   const nextBtn = wrap.querySelector(NEXT_BTN);
   const todayBtn = wrap.querySelector(TODAY_BTN);
-  console.log('[event-list] DEBUG buildListConfig: duplicateRecurring =', duplicateRecurring, '| hidePastEvents =', hidePastEvents, '| range =', range, '| weekStartDay =', weekStartDay, '| label found:', !!label, '| prevBtn found:', !!prevBtn, '| nextBtn found:', !!nextBtn, '| todayBtn found:', !!todayBtn);
+  const itemCount = readItemCount(wrap, null);
+  const { loadMoreWrap, loadMoreBtn } = itemCount ? resolveLoadMore(wrap) : {};
+  debugLog('[event-list] buildListConfig: duplicateRecurring =', duplicateRecurring, '| hidePastEvents =', hidePastEvents, '| range =', range, '| weekStartDay =', weekStartDay, '| itemCount =', itemCount, '| label found:', !!label, '| prevBtn found:', !!prevBtn, '| nextBtn found:', !!nextBtn, '| todayBtn found:', !!todayBtn);
 
   const entries = buildEntries(wrap, eventsBySlug);
-  console.log('[event-list] DEBUG buildListConfig: successfully paired entries:', entries.length, entries);
+  debugLog('[event-list] buildListConfig: successfully paired entries:', entries.length, entries);
   if (entries.length === 0) return null;
 
-  return { duplicateRecurring, hidePastEvents, range, weekStartDay, label, prevBtn, nextBtn, todayBtn, entries, list };
+  return {
+    duplicateRecurring,
+    hidePastEvents,
+    range,
+    weekStartDay,
+    label,
+    prevBtn,
+    nextBtn,
+    todayBtn,
+    itemCount,
+    loadMoreWrap,
+    loadMoreBtn,
+    entries,
+    list,
+  };
 }
 
 function initList(config, listInstance) {
-  const { duplicateRecurring, hidePastEvents, range, weekStartDay, label, prevBtn, nextBtn, todayBtn, entries, list } =
-    config;
+  const {
+    duplicateRecurring,
+    hidePastEvents,
+    range,
+    weekStartDay,
+    label,
+    prevBtn,
+    nextBtn,
+    todayBtn,
+    itemCount,
+    loadMoreWrap,
+    loadMoreBtn,
+    entries,
+    list,
+  } = config;
   const eventByElement = new Map(entries.map(({ item, event }) => [item, event]));
-  console.log('[event-list] DEBUG initList: registering hook, listInstance =', listInstance);
+  debugLog('[event-list] initList: registering hook, listInstance =', listInstance);
 
   let current = anchorFor(new Date(), range, weekStartDay);
+  // How many occurrence-cards are currently revealed for the active range —
+  // only meaningful when itemCount is set; reset to itemCount on every nav
+  // change (refresh()) and grown by itemCount on each Load More click.
+  let renderedCount = itemCount || 0;
 
   listInstance.addHook('filter', (items) => {
     const { start: rangeStart, end: rangeEnd } = getRangeBounds(current, range);
-    console.log('[event-list] DEBUG filter hook FIRED. items received from Finsweet:', items.length, items, '| active range:', rangeStart, '-', rangeEnd);
+    debugLog('[event-list] filter hook FIRED. items received from Finsweet:', items.length, items, '| active range:', rangeStart, '-', rangeEnd);
 
     // Defensive cleanup: remove any clones from a previous pass in case
     // Finsweet doesn't drop DOM nodes that fall out of the returned array —
     // see the "known risk" note in the plan for why this stays even though
     // the map lookup below would also exclude stale clones on its own.
     const removedClones = list.querySelectorAll(`[${CLONE_ATTR}]`);
-    console.log('[event-list] DEBUG removing stale clones from previous pass:', removedClones.length);
+    debugLog('[event-list] removing stale clones from previous pass:', removedClones.length);
     removedClones.forEach((el) => el.remove());
 
-    const result = [];
-
+    // Pass 1: gather every occurrence across every item into one
+    // chronologically sorted list — no DOM created yet. This is what lets
+    // itemCount slice across events, not per-event.
+    const pending = [];
     items.forEach((listItem) => {
       const event = eventByElement.get(listItem.element);
       if (!event) {
-        console.log('[event-list] DEBUG no matching event for this listItem.element (stale/unrecognized) — dropping:', listItem.element);
+        debugLog('[event-list] no matching event for this listItem.element (stale/unrecognized) — dropping:', listItem.element);
         return;
       }
 
@@ -288,39 +354,59 @@ function initList(config, listInstance) {
         const now = new Date();
         occurrences = occurrences.filter((occ) => occ.end >= now);
       }
-      console.log('[event-list] DEBUG event', event.name, '-> occurrences in range:', occurrences.length);
+      if (!duplicateRecurring) occurrences = occurrences.slice(0, 1);
+      debugLog('[event-list] event', event.name, '-> occurrences in range:', occurrences.length);
 
-      // Defensive: explicitly control the original (non-cloned) element's
-      // visibility ourselves rather than trusting Finsweet to hide it just
-      // because it's excluded from the array returned below — this element
-      // was already in the DOM from Webflow's own render, not created via
-      // listInstance.createItem(), so the same "known risk" noted above for
-      // clones applies to it too.
-      listItem.element.style.display = occurrences.length === 0 ? 'none' : '';
-      if (occurrences.length === 0) return;
+      occurrences.forEach((occurrence) => {
+        pending.push({ listItem, event, occurrence, date: occurrence.start, showStartTime: event.showStartTime });
+      });
+    });
+    pending.sort(compareListEntries);
 
-      const [first, ...rest] = occurrences;
-      setDateFields(listItem.element, first, event);
-      result.push({ listItem, date: first.start, showStartTime: event.showStartTime });
+    const total = pending.length;
+    const visibleCount = itemCount ? Math.min(renderedCount, total) : total;
+    const visible = pending.slice(0, visibleCount);
 
-      if (duplicateRecurring) {
-        let insertAfter = listItem.element;
-        rest.forEach((occ, i) => {
-          const clone = createOccurrenceCard(listItem.element, occ, event, `occ-${i + 1}`);
-          insertAfter.insertAdjacentElement('afterend', clone);
-          insertAfter = clone;
-          result.push({ listItem: listInstance.createItem(clone), date: occ.start, showStartTime: event.showStartTime });
-        });
+    // Pass 2: materialize only the visible slice — hide every original
+    // element by default, then un-hide/clone exactly what's needed. Nothing
+    // beyond the slice is ever created, so there's no hidden-clone state for
+    // Finsweet (or watchAndUnhide, see below) to fight over on Load More.
+    items.forEach((listItem) => {
+      listItem.element.style.display = 'none';
+    });
+
+    const claimedOriginal = new Set();
+    const insertAfterByItem = new Map();
+    const result = [];
+
+    visible.forEach(({ listItem, event, occurrence, date, showStartTime }) => {
+      if (!claimedOriginal.has(listItem)) {
+        claimedOriginal.add(listItem);
+        listItem.element.style.display = '';
+        setDateFields(listItem.element, occurrence, event);
+        insertAfterByItem.set(listItem, listItem.element);
+        result.push({ listItem, date, showStartTime });
+      } else {
+        const prevEl = insertAfterByItem.get(listItem);
+        const clone = createOccurrenceCard(listItem.element, occurrence, event, `occ-${result.length}`);
+        prevEl.insertAdjacentElement('afterend', clone);
+        insertAfterByItem.set(listItem, clone);
+        result.push({ listItem: listInstance.createItem(clone), date, showStartTime });
       }
     });
 
-    result.sort(compareListEntries);
-    console.log('[event-list] DEBUG filter hook RETURNING', result.length, 'items to Finsweet');
+    if (itemCount) {
+      const target = loadMoreWrap || loadMoreBtn;
+      if (target) target.style.display = visibleCount < total ? '' : 'none';
+    }
+
+    debugLog('[event-list] filter hook RETURNING', result.length, 'of', total, 'items to Finsweet');
     return result.map((r) => r.listItem);
   });
 
   const refresh = () => {
-    console.log('[event-list] DEBUG refresh() called — range now:', current);
+    if (itemCount) renderedCount = itemCount;
+    debugLog('[event-list] refresh() called — range now:', current);
     if (label) {
       const format = attr('', label.getAttribute('data-ix-events-label-format'));
       label.textContent =
@@ -350,6 +436,10 @@ function initList(config, listInstance) {
     if (isTodayDisabled(current, range)) return;
     current = anchorFor(new Date(), range, weekStartDay);
     refresh();
+  });
+  loadMoreBtn?.addEventListener('click', () => {
+    renderedCount += itemCount;
+    listInstance.triggerHook('filter');
   });
 }
 
@@ -386,14 +476,15 @@ export const eventFeed = function () {
   const wraps = [...document.querySelectorAll(WRAP)].filter(
     (wrap) => wrap.getAttribute('data-ix-events-layout') === FEED_LAYOUT
   );
-  console.log('[event-feed] DEBUG wraps with layout="feed" found:', wraps.length, wraps);
+  debugLog('[event-feed] wraps with layout="feed" found:', wraps.length, wraps);
   if (wraps.length === 0) return;
 
-  whenEvents((events) => {
-    console.log('[event-feed] DEBUG whenEvents callback fired, events received:', events.length, events);
-    const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
+  // whenEvents is called per-wrap — see the matching note in eventList().
+  wraps.forEach((wrap) => {
+    whenEvents(wrap, (events) => {
+      debugLog('[event-feed] whenEvents callback fired, events received:', events.length, events);
+      const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
 
-    wraps.forEach((wrap) => {
       // Feed doesn't need a Finsweet List instance for its own rendering (see
       // header comment) — only, optionally, to know when fs-list-load="all"
       // pagination has finished. `required: false` means proceed immediately
@@ -405,11 +496,11 @@ export const eventFeed = function () {
 
 function initFeed(wrap, eventsBySlug) {
   const entries = buildEntries(wrap, eventsBySlug);
-  console.log('[event-feed] DEBUG initFeed: entries found for wrap:', entries.length, wrap);
+  debugLog('[event-feed] initFeed: entries found for wrap:', entries.length, wrap);
   if (entries.length === 0) return;
 
   const duplicateRecurring = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-duplicate-recurring`));
-  const feedCount = attr(12, wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-count`));
+  const itemCount = readItemCount(wrap, 12);
   let feedPeriod = attr('month', wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-period`)?.toLowerCase());
   if (feedPeriod !== 'month' && feedPeriod !== 'week') feedPeriod = 'month';
   const feedDivider = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-divider`));
@@ -423,10 +514,11 @@ function initFeed(wrap, eventsBySlug) {
     item.style.display = 'none';
   });
 
-  const loadMoreBtn = wrap.querySelector(LOAD_MORE_BTN);
+  const { loadMoreWrap, loadMoreBtn } = resolveLoadMore(wrap);
+  const loadMoreTarget = loadMoreWrap || loadMoreBtn;
   const dividerTemplate = wrap.querySelector(FEED_DIVIDER_EL);
   const dividerTextEl = dividerTemplate?.querySelector(FEED_DIVIDER_TEXT_EL);
-  console.log('[event-feed] DEBUG initFeed: duplicateRecurring =', duplicateRecurring, '| feedCount =', feedCount, '| feedPeriod =', feedPeriod, '| feedDivider =', feedDivider, '| feedDividerToday =', feedDividerToday, '| loadMoreBtn found:', !!loadMoreBtn, '| dividerTemplate found:', !!dividerTemplate);
+  debugLog('[event-feed] initFeed: duplicateRecurring =', duplicateRecurring, '| itemCount =', itemCount, '| feedPeriod =', feedPeriod, '| feedDivider =', feedDivider, '| feedDividerToday =', feedDividerToday, '| loadMoreBtn found:', !!loadMoreBtn, '| dividerTemplate found:', !!dividerTemplate);
   if (feedDivider && !dividerTemplate) {
     console.warn('event-feed: feed-divider is enabled but no [data-ix-events="feed-divider"] element was found.', wrap);
   }
@@ -454,7 +546,7 @@ function initFeed(wrap, eventsBySlug) {
   function loadMore() {
     const now = new Date();
     const rangeStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const targetCount = renderedCount + feedCount;
+    const targetCount = renderedCount + itemCount;
 
     let searchEnd = stepPeriodEnd(rangeStart, feedPeriod);
     let merged = mergeOccurrences(entries, rangeStart, searchEnd, duplicateRecurring);
@@ -466,9 +558,9 @@ function initFeed(wrap, eventsBySlug) {
     }
 
     const batch = merged.slice(renderedCount, targetCount);
-    console.log('[event-feed] DEBUG loadMore: targetCount =', targetCount, '| total merged occurrences found:', merged.length, '(after', iterations, 'extra search steps) | batch size:', batch.length);
+    debugLog('[event-feed] loadMore: targetCount =', targetCount, '| total merged occurrences found:', merged.length, '(after', iterations, 'extra search steps) | batch size:', batch.length);
     if (batch.length === 0) {
-      if (loadMoreBtn) loadMoreBtn.style.display = 'none';
+      if (loadMoreTarget) loadMoreTarget.style.display = 'none';
       return;
     }
 
@@ -487,7 +579,7 @@ function initFeed(wrap, eventsBySlug) {
     });
 
     renderedCount += batch.length;
-    if (batch.length < feedCount && loadMoreBtn) loadMoreBtn.style.display = 'none';
+    if (batch.length < itemCount && loadMoreTarget) loadMoreTarget.style.display = 'none';
   }
 
   loadMore();
@@ -533,7 +625,7 @@ function buildEntries(wrap, eventsBySlug) {
           return null;
         }
       } else {
-        // Separate: match to the page's data-wrap by slug.
+        // Separate: match to this wrap's resolved data-wrap by slug.
         const slug = item.getAttribute(SLUG_ATTR);
         event = slug ? eventsBySlug.get(slug) : null;
         if (!event) {
@@ -547,6 +639,29 @@ function buildEntries(wrap, eventsBySlug) {
       return event.startDate ? { item, event } : null;
     })
     .filter(Boolean);
+}
+
+// Shared by both views: unset/blank/invalid => defaultValue (List View's
+// default is null, meaning "no limit, show everything" — the pre-existing
+// behavior; Feed View's default is 12, unchanged from before this option
+// was shared and renamed from data-ix-events-feed-count).
+function readItemCount(wrap, defaultValue) {
+  const raw = wrap.getAttribute(`data-ix-${ANIMATION_ID}-item-count`);
+  if (raw === null || raw.trim() === '') return defaultValue;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : defaultValue;
+}
+
+// Resolves the optional load-more-wrap/load-more pair, shared by both views.
+// If a [data-ix-events="load-more-wrap"] is present, the button is looked up
+// INSIDE it (and the wrap itself is what gets shown/hidden). If it's absent,
+// falls back to a bare [data-ix-events="load-more"] button found anywhere in
+// wrap (and the button itself is what gets shown/hidden) — keeps Feed View's
+// original, already-shipped flat markup (no wrap) working unchanged.
+function resolveLoadMore(wrap) {
+  const loadMoreWrap = wrap.querySelector(LOAD_MORE_WRAP);
+  const loadMoreBtn = (loadMoreWrap || wrap).querySelector(LOAD_MORE_BTN);
+  return { loadMoreWrap, loadMoreBtn };
 }
 
 // Resolves this wrap's Finsweet List instance, awaiting `loadingPaginatedItems`

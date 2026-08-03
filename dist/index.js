@@ -6,6 +6,8 @@
   );
 
   // src/utilities.js
+  var debugLog = true ? console.log.bind(console) : () => {
+  };
   var attr = function(defaultVal, attrVal) {
     const defaultValType = typeof defaultVal;
     if (typeof attrVal !== "string" || attrVal.trim() === "") return defaultVal;
@@ -204,27 +206,56 @@
   }
 
   // src/event-data.js
+  var WRAP = '[data-ix-events="wrap"]';
   var DATA_WRAP = '[data-ix-events="data-wrap"]';
   var ITEM = '[data-ix-events="item"]';
   var DATA_EL = '[data-ix-events="data"]';
   var MAX_ATTEMPTS = 20;
   var RETRY_DELAY = 300;
-  function whenEvents(callback) {
-    let attempts = 0;
-    const tryLoad = () => {
-      const dataWraps = document.querySelectorAll(DATA_WRAP);
-      if (dataWraps.length > 1) {
+  function resolveDataWrap(wrap) {
+    const all = [...document.querySelectorAll(DATA_WRAP)];
+    const local = all.filter((el) => el.closest(WRAP) === wrap);
+    if (local.length > 0) {
+      if (local.length > 1) {
         console.warn(
-          `events: found ${dataWraps.length} elements matching ${DATA_WRAP} \u2014 using the first one. Remove the extras to avoid duplicate or conflicting event data.`
+          `events: found ${local.length} elements matching ${DATA_WRAP} inside this wrap \u2014 using the first one.`,
+          wrap
         );
       }
-      const dataWrap = dataWraps[0];
+      debugLog("[event-data] resolveDataWrap \u2014 using LOCAL data-wrap for", wrap, "->", local[0]);
+      return local[0];
+    }
+    const candidates = all.filter((el) => el.closest(WRAP) === null);
+    if (candidates.length > 1) {
+      console.warn(
+        `events: found ${candidates.length} page-level elements matching ${DATA_WRAP} (not nested inside any wrap) \u2014 using the first one. Remove the extras, or nest one inside a specific wrap to scope it there instead.`
+      );
+    }
+    debugLog(
+      "[event-data] resolveDataWrap \u2014 no local data-wrap for",
+      wrap,
+      ", using page-level fallback ->",
+      candidates[0] || null,
+      `(${candidates.length} unclaimed candidate(s) found)`
+    );
+    return candidates[0] || null;
+  }
+  function whenEvents(wrap, callback) {
+    let attempts = 0;
+    const tryLoad = () => {
+      const dataWrap = resolveDataWrap(wrap);
       const items = dataWrap ? [...dataWrap.querySelectorAll(ITEM)] : [];
       if (items.length === 0) {
         attempts++;
         if (attempts < MAX_ATTEMPTS) {
           setTimeout(tryLoad, RETRY_DELAY);
           return;
+        }
+        if (!dataWrap) {
+          console.warn(
+            `events: no ${DATA_WRAP} found for this wrap \u2014 neither nested inside it, nor at the page level (outside any wrap).`,
+            wrap
+          );
         }
         callback([]);
         return;
@@ -419,7 +450,7 @@
   var ANIMATION_ID = "events";
   var LIST_LAYOUT = "list";
   var FEED_LAYOUT = "feed";
-  var WRAP = '[data-ix-events="wrap"]';
+  var WRAP2 = '[data-ix-events="wrap"]';
   var PREV_BTN = '[data-ix-events="prev"]';
   var NEXT_BTN = '[data-ix-events="next"]';
   var TODAY_BTN = '[data-ix-events="today"]';
@@ -431,23 +462,24 @@
   var CLONE_ATTR = "data-ix-events-clone";
   var DISABLED_CLASS = "is-disabled";
   var FS_LIST_SELECTOR = '[fs-list-element="list"]';
+  var LOAD_MORE_WRAP = '[data-ix-events="load-more-wrap"]';
   var LOAD_MORE_BTN = '[data-ix-events="load-more"]';
   var FEED_DIVIDER_EL = '[data-ix-events="feed-divider"]';
   var FEED_DIVIDER_TEXT_EL = '[data-ix-events="feed-divider-text"]';
   var FEED_SEARCH_CAP = 36;
   var eventList = function() {
-    const wraps = [...document.querySelectorAll(WRAP)].filter(
+    const wraps = [...document.querySelectorAll(WRAP2)].filter(
       (wrap) => wrap.getAttribute("data-ix-events-layout") === LIST_LAYOUT
     );
-    console.log('[event-list] DEBUG wraps with layout="list" found:', wraps.length, wraps);
+    debugLog('[event-list] wraps with layout="list" found:', wraps.length, wraps);
     if (wraps.length === 0) return;
-    whenEvents((events) => {
-      console.log("[event-list] DEBUG whenEvents callback fired, events received:", events.length, events);
-      const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
-      wraps.forEach((wrap) => {
+    wraps.forEach((wrap) => {
+      whenEvents(wrap, (events) => {
+        debugLog("[event-list] whenEvents callback fired, events received:", events.length, events);
+        const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
         whenListReady(wrap, true, (listInstance) => {
           const config = buildListConfig(wrap, listInstance.listElement, eventsBySlug);
-          console.log("[event-list] DEBUG config built for wrap:", wrap, "-> ", config);
+          debugLog("[event-list] config built for wrap:", wrap, "-> ", config);
           if (!config) return;
           initList(config, listInstance);
         });
@@ -464,28 +496,59 @@
     const prevBtn = wrap.querySelector(PREV_BTN);
     const nextBtn = wrap.querySelector(NEXT_BTN);
     const todayBtn = wrap.querySelector(TODAY_BTN);
-    console.log("[event-list] DEBUG buildListConfig: duplicateRecurring =", duplicateRecurring, "| hidePastEvents =", hidePastEvents, "| range =", range, "| weekStartDay =", weekStartDay, "| label found:", !!label, "| prevBtn found:", !!prevBtn, "| nextBtn found:", !!nextBtn, "| todayBtn found:", !!todayBtn);
+    const itemCount = readItemCount(wrap, null);
+    const { loadMoreWrap, loadMoreBtn } = itemCount ? resolveLoadMore(wrap) : {};
+    debugLog("[event-list] buildListConfig: duplicateRecurring =", duplicateRecurring, "| hidePastEvents =", hidePastEvents, "| range =", range, "| weekStartDay =", weekStartDay, "| itemCount =", itemCount, "| label found:", !!label, "| prevBtn found:", !!prevBtn, "| nextBtn found:", !!nextBtn, "| todayBtn found:", !!todayBtn);
     const entries = buildEntries(wrap, eventsBySlug);
-    console.log("[event-list] DEBUG buildListConfig: successfully paired entries:", entries.length, entries);
+    debugLog("[event-list] buildListConfig: successfully paired entries:", entries.length, entries);
     if (entries.length === 0) return null;
-    return { duplicateRecurring, hidePastEvents, range, weekStartDay, label, prevBtn, nextBtn, todayBtn, entries, list };
+    return {
+      duplicateRecurring,
+      hidePastEvents,
+      range,
+      weekStartDay,
+      label,
+      prevBtn,
+      nextBtn,
+      todayBtn,
+      itemCount,
+      loadMoreWrap,
+      loadMoreBtn,
+      entries,
+      list
+    };
   }
   function initList(config, listInstance) {
-    const { duplicateRecurring, hidePastEvents, range, weekStartDay, label, prevBtn, nextBtn, todayBtn, entries, list } = config;
+    const {
+      duplicateRecurring,
+      hidePastEvents,
+      range,
+      weekStartDay,
+      label,
+      prevBtn,
+      nextBtn,
+      todayBtn,
+      itemCount,
+      loadMoreWrap,
+      loadMoreBtn,
+      entries,
+      list
+    } = config;
     const eventByElement = new Map(entries.map(({ item, event }) => [item, event]));
-    console.log("[event-list] DEBUG initList: registering hook, listInstance =", listInstance);
+    debugLog("[event-list] initList: registering hook, listInstance =", listInstance);
     let current = anchorFor(/* @__PURE__ */ new Date(), range, weekStartDay);
+    let renderedCount = itemCount || 0;
     listInstance.addHook("filter", (items) => {
       const { start: rangeStart, end: rangeEnd } = getRangeBounds(current, range);
-      console.log("[event-list] DEBUG filter hook FIRED. items received from Finsweet:", items.length, items, "| active range:", rangeStart, "-", rangeEnd);
+      debugLog("[event-list] filter hook FIRED. items received from Finsweet:", items.length, items, "| active range:", rangeStart, "-", rangeEnd);
       const removedClones = list.querySelectorAll(`[${CLONE_ATTR}]`);
-      console.log("[event-list] DEBUG removing stale clones from previous pass:", removedClones.length);
+      debugLog("[event-list] removing stale clones from previous pass:", removedClones.length);
       removedClones.forEach((el) => el.remove());
-      const result = [];
+      const pending = [];
       items.forEach((listItem) => {
         const event = eventByElement.get(listItem.element);
         if (!event) {
-          console.log("[event-list] DEBUG no matching event for this listItem.element (stale/unrecognized) \u2014 dropping:", listItem.element);
+          debugLog("[event-list] no matching event for this listItem.element (stale/unrecognized) \u2014 dropping:", listItem.element);
           return;
         }
         let occurrences = getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
@@ -493,28 +556,47 @@
           const now = /* @__PURE__ */ new Date();
           occurrences = occurrences.filter((occ) => occ.end >= now);
         }
-        console.log("[event-list] DEBUG event", event.name, "-> occurrences in range:", occurrences.length);
-        listItem.element.style.display = occurrences.length === 0 ? "none" : "";
-        if (occurrences.length === 0) return;
-        const [first, ...rest] = occurrences;
-        setDateFields(listItem.element, first, event);
-        result.push({ listItem, date: first.start, showStartTime: event.showStartTime });
-        if (duplicateRecurring) {
-          let insertAfter = listItem.element;
-          rest.forEach((occ, i) => {
-            const clone = createOccurrenceCard(listItem.element, occ, event, `occ-${i + 1}`);
-            insertAfter.insertAdjacentElement("afterend", clone);
-            insertAfter = clone;
-            result.push({ listItem: listInstance.createItem(clone), date: occ.start, showStartTime: event.showStartTime });
-          });
+        if (!duplicateRecurring) occurrences = occurrences.slice(0, 1);
+        debugLog("[event-list] event", event.name, "-> occurrences in range:", occurrences.length);
+        occurrences.forEach((occurrence) => {
+          pending.push({ listItem, event, occurrence, date: occurrence.start, showStartTime: event.showStartTime });
+        });
+      });
+      pending.sort(compareListEntries);
+      const total = pending.length;
+      const visibleCount = itemCount ? Math.min(renderedCount, total) : total;
+      const visible = pending.slice(0, visibleCount);
+      items.forEach((listItem) => {
+        listItem.element.style.display = "none";
+      });
+      const claimedOriginal = /* @__PURE__ */ new Set();
+      const insertAfterByItem = /* @__PURE__ */ new Map();
+      const result = [];
+      visible.forEach(({ listItem, event, occurrence, date, showStartTime }) => {
+        if (!claimedOriginal.has(listItem)) {
+          claimedOriginal.add(listItem);
+          listItem.element.style.display = "";
+          setDateFields(listItem.element, occurrence, event);
+          insertAfterByItem.set(listItem, listItem.element);
+          result.push({ listItem, date, showStartTime });
+        } else {
+          const prevEl = insertAfterByItem.get(listItem);
+          const clone = createOccurrenceCard(listItem.element, occurrence, event, `occ-${result.length}`);
+          prevEl.insertAdjacentElement("afterend", clone);
+          insertAfterByItem.set(listItem, clone);
+          result.push({ listItem: listInstance.createItem(clone), date, showStartTime });
         }
       });
-      result.sort(compareListEntries);
-      console.log("[event-list] DEBUG filter hook RETURNING", result.length, "items to Finsweet");
+      if (itemCount) {
+        const target = loadMoreWrap || loadMoreBtn;
+        if (target) target.style.display = visibleCount < total ? "" : "none";
+      }
+      debugLog("[event-list] filter hook RETURNING", result.length, "of", total, "items to Finsweet");
       return result.map((r) => r.listItem);
     });
     const refresh = () => {
-      console.log("[event-list] DEBUG refresh() called \u2014 range now:", current);
+      if (itemCount) renderedCount = itemCount;
+      debugLog("[event-list] refresh() called \u2014 range now:", current);
       if (label) {
         const format = attr("", label.getAttribute("data-ix-events-label-format"));
         label.textContent = range === "week" ? formatWeekLabel(current, format || void 0) : formatOccurrenceDate(current, format || "MMMM YYYY");
@@ -541,6 +623,10 @@
       current = anchorFor(/* @__PURE__ */ new Date(), range, weekStartDay);
       refresh();
     });
+    loadMoreBtn?.addEventListener("click", () => {
+      renderedCount += itemCount;
+      listInstance.triggerHook("filter");
+    });
   }
   function isPrevDisabled(current, range, hidePastEvents) {
     if (!hidePastEvents) return false;
@@ -559,25 +645,25 @@
     return a.date - b.date;
   }
   var eventFeed = function() {
-    const wraps = [...document.querySelectorAll(WRAP)].filter(
+    const wraps = [...document.querySelectorAll(WRAP2)].filter(
       (wrap) => wrap.getAttribute("data-ix-events-layout") === FEED_LAYOUT
     );
-    console.log('[event-feed] DEBUG wraps with layout="feed" found:', wraps.length, wraps);
+    debugLog('[event-feed] wraps with layout="feed" found:', wraps.length, wraps);
     if (wraps.length === 0) return;
-    whenEvents((events) => {
-      console.log("[event-feed] DEBUG whenEvents callback fired, events received:", events.length, events);
-      const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
-      wraps.forEach((wrap) => {
+    wraps.forEach((wrap) => {
+      whenEvents(wrap, (events) => {
+        debugLog("[event-feed] whenEvents callback fired, events received:", events.length, events);
+        const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
         whenListReady(wrap, false, () => initFeed(wrap, eventsBySlug));
       });
     });
   };
   function initFeed(wrap, eventsBySlug) {
     const entries = buildEntries(wrap, eventsBySlug);
-    console.log("[event-feed] DEBUG initFeed: entries found for wrap:", entries.length, wrap);
+    debugLog("[event-feed] initFeed: entries found for wrap:", entries.length, wrap);
     if (entries.length === 0) return;
     const duplicateRecurring = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-duplicate-recurring`));
-    const feedCount = attr(12, wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-count`));
+    const itemCount = readItemCount(wrap, 12);
     let feedPeriod = attr("month", wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-period`)?.toLowerCase());
     if (feedPeriod !== "month" && feedPeriod !== "week") feedPeriod = "month";
     const feedDivider = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-divider`));
@@ -586,10 +672,11 @@
     entries.forEach(({ item }) => {
       item.style.display = "none";
     });
-    const loadMoreBtn = wrap.querySelector(LOAD_MORE_BTN);
+    const { loadMoreWrap, loadMoreBtn } = resolveLoadMore(wrap);
+    const loadMoreTarget = loadMoreWrap || loadMoreBtn;
     const dividerTemplate = wrap.querySelector(FEED_DIVIDER_EL);
     const dividerTextEl = dividerTemplate?.querySelector(FEED_DIVIDER_TEXT_EL);
-    console.log("[event-feed] DEBUG initFeed: duplicateRecurring =", duplicateRecurring, "| feedCount =", feedCount, "| feedPeriod =", feedPeriod, "| feedDivider =", feedDivider, "| feedDividerToday =", feedDividerToday, "| loadMoreBtn found:", !!loadMoreBtn, "| dividerTemplate found:", !!dividerTemplate);
+    debugLog("[event-feed] initFeed: duplicateRecurring =", duplicateRecurring, "| itemCount =", itemCount, "| feedPeriod =", feedPeriod, "| feedDivider =", feedDivider, "| feedDividerToday =", feedDividerToday, "| loadMoreBtn found:", !!loadMoreBtn, "| dividerTemplate found:", !!dividerTemplate);
     if (feedDivider && !dividerTemplate) {
       console.warn('event-feed: feed-divider is enabled but no [data-ix-events="feed-divider"] element was found.', wrap);
     }
@@ -606,7 +693,7 @@
     function loadMore() {
       const now = /* @__PURE__ */ new Date();
       const rangeStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const targetCount = renderedCount + feedCount;
+      const targetCount = renderedCount + itemCount;
       let searchEnd = stepPeriodEnd(rangeStart, feedPeriod);
       let merged = mergeOccurrences(entries, rangeStart, searchEnd, duplicateRecurring);
       let iterations = 0;
@@ -616,9 +703,9 @@
         iterations++;
       }
       const batch = merged.slice(renderedCount, targetCount);
-      console.log("[event-feed] DEBUG loadMore: targetCount =", targetCount, "| total merged occurrences found:", merged.length, "(after", iterations, "extra search steps) | batch size:", batch.length);
+      debugLog("[event-feed] loadMore: targetCount =", targetCount, "| total merged occurrences found:", merged.length, "(after", iterations, "extra search steps) | batch size:", batch.length);
       if (batch.length === 0) {
-        if (loadMoreBtn) loadMoreBtn.style.display = "none";
+        if (loadMoreTarget) loadMoreTarget.style.display = "none";
         return;
       }
       batch.forEach(({ item, event, occurrence }, i) => {
@@ -635,7 +722,7 @@
         container.appendChild(createOccurrenceCard(item, occurrence, event, `feed-${renderedCount + i}`));
       });
       renderedCount += batch.length;
-      if (batch.length < feedCount && loadMoreBtn) loadMoreBtn.style.display = "none";
+      if (batch.length < itemCount && loadMoreTarget) loadMoreTarget.style.display = "none";
     }
     loadMore();
     loadMoreBtn?.addEventListener("click", loadMore);
@@ -681,6 +768,17 @@
       }
       return event.startDate ? { item, event } : null;
     }).filter(Boolean);
+  }
+  function readItemCount(wrap, defaultValue) {
+    const raw = wrap.getAttribute(`data-ix-${ANIMATION_ID}-item-count`);
+    if (raw === null || raw.trim() === "") return defaultValue;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : defaultValue;
+  }
+  function resolveLoadMore(wrap) {
+    const loadMoreWrap = wrap.querySelector(LOAD_MORE_WRAP);
+    const loadMoreBtn = (loadMoreWrap || wrap).querySelector(LOAD_MORE_BTN);
+    return { loadMoreWrap, loadMoreBtn };
   }
   function whenListReady(wrap, required, callback) {
     const list = wrap.querySelector(FS_LIST_SELECTOR);
@@ -731,7 +829,7 @@
   // src/calendar.js
   var ANIMATION_ID2 = "events";
   var LAYOUT = "calendar";
-  var WRAP2 = '[data-ix-events="wrap"]';
+  var WRAP3 = '[data-ix-events="wrap"]';
   var PREV_BTN2 = '[data-ix-events="prev"]';
   var NEXT_BTN2 = '[data-ix-events="next"]';
   var TODAY_BTN2 = '[data-ix-events="today"]';
@@ -761,17 +859,17 @@
     "show-start-time": (event) => String(event.showStartTime),
     "show-end-time": (event) => String(event.showEndTime),
     "show-end-date": (event) => String(event.showEndDate),
-    "recurring-frequency": (event) => event.recurringFrequency,
+    "recurring-frequency": (event) => event.recurringFrequency === "None" ? "" : event.recurringFrequency,
     "recurring-interval": (event) => String(event.recurringInterval),
     "recurring-days": (event) => event.recurringDays.join(", "),
     "recurring-skip-dates": (event) => event.recurringSkipDates.join(", ")
   };
   var DOW_SHORT2 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   var calendar = function() {
-    const wraps = [...document.querySelectorAll(WRAP2)].filter(
+    const wraps = [...document.querySelectorAll(WRAP3)].filter(
       (wrap) => wrap.getAttribute("data-ix-events-layout") === LAYOUT
     );
-    console.log('[calendar] DEBUG wraps with layout="calendar" found:', wraps.length, wraps);
+    debugLog('[calendar] wraps with layout="calendar" found:', wraps.length, wraps);
     if (wraps.length === 0) return;
     wraps.forEach((wrap) => initCalendar(wrap));
   };
@@ -802,12 +900,7 @@
     const loadingEl = wrap.querySelector(LOADING);
     const demoNoteEl = wrap.querySelector(DEMO_NOTE);
     const hoverCardsBySlug = buildHoverCardMap(wrap);
-    console.log(
-      "[calendar] DEBUG hover-cards found:",
-      hoverCardsBySlug.size,
-      "| slugs:",
-      [...hoverCardsBySlug.keys()]
-    );
+    debugLog("[calendar] hover-cards found:", hoverCardsBySlug.size, "| slugs:", [...hoverCardsBySlug.keys()]);
     if (hoverCardsBySlug.size === 0) {
       console.warn(
         `calendar: no [data-ix-events="hover-card"] elements with a resolved data-ix-events-slug were found \u2014 hover cards will never show for this instance. If you haven't yet wrapped the hover-card template in a live Webflow Collection List bound to your Events collection (see the TODO comment in the mockup), that's almost certainly why \u2014 the un-wired template only carries the literal, unresolved "{{wf:Slug}}" text.`,
@@ -904,8 +997,8 @@
       current = anchorFor(/* @__PURE__ */ new Date(), range, weekStartDay);
       refresh();
     });
-    whenEvents((events) => {
-      console.log("[calendar] DEBUG whenEvents callback fired, events received:", events.length, events);
+    whenEvents(wrap, (events) => {
+      debugLog("[calendar] whenEvents callback fired, events received:", events.length, events);
       const usedDemo = events.length === 0;
       state.events = usedDemo ? demoEvents() : events;
       loadingEl?.classList.remove("is-active");
@@ -964,7 +1057,7 @@
     const left = Math.max(0, Math.min(rawLeft, parentRect.width - cardRect.width));
     const showBelow = targetRect.top < window.innerHeight / 2;
     const top = showBelow ? targetRect.bottom - parentRect.top + gap : targetRect.top - parentRect.top - cardRect.height - gap;
-    console.log("[calendar] DEBUG showHoverCard \u2014 event:", event.name, "| left:", left, "| top:", top, "| showBelow:", showBelow, "| parent:", parent);
+    debugLog("[calendar] showHoverCard \u2014 event:", event.name, "| left:", left, "| top:", top, "| showBelow:", showBelow, "| parent:", parent);
     card.style.left = `${left}px`;
     card.style.top = `${top}px`;
     card.classList.toggle("is-above", !showBelow);
@@ -1087,7 +1180,7 @@
         const card = hoverCardsBySlug.get(seg.event.slug);
         if (!card) unmatchedSlugs.add(seg.event.slug);
         pill.addEventListener("mouseenter", () => {
-          console.log("[calendar] DEBUG pill mouseenter \u2014 event:", seg.event.name, "| slug:", seg.event.slug, "| card found:", !!card);
+          debugLog("[calendar] pill mouseenter \u2014 event:", seg.event.name, "| slug:", seg.event.slug, "| card found:", !!card);
           if (!card) return;
           if (hoverState.activeCard && hoverState.activeCard !== card) {
             hideHoverCard(hoverState.activeCard);
@@ -1096,7 +1189,7 @@
           showHoverCard(card, seg.occurrence, seg.event, pill, wrap);
         });
         pill.addEventListener("mouseleave", () => {
-          console.log("[calendar] DEBUG pill mouseleave \u2014 event:", seg.event.name);
+          debugLog("[calendar] pill mouseleave \u2014 event:", seg.event.name);
           hideHoverCard(card);
           if (hoverState.activeCard === card) hoverState.activeCard = null;
         });
