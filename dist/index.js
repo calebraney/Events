@@ -372,12 +372,17 @@
     const start12Hour = start.getHours() % 12 || 12;
     return startPeriod === endPeriod && start12Hour !== 12 ? startTimeText.slice(0, -2) : startTimeText;
   }
-  function formatPillTime(occurrence, event, showEndTime) {
+  function isTimeFormat(format) {
+    const upper = format.trim().toUpperCase();
+    return upper === "TIME" || upper === "TIME-SHORT";
+  }
+  function formatTimeOnly(occurrence, event, short) {
     if (!event.showStartTime) return null;
     const { start, end } = occurrence;
-    const startTime = formatOccurrenceDate(start, "h:mma");
-    if (!showEndTime || !event.showEndTime || end.getTime() === start.getTime()) return startTime;
-    const endTime = formatOccurrenceDate(end, "h:mma");
+    const formatSide = short ? formatClockTime : (date) => formatOccurrenceDate(date, "h:mma");
+    const startTime = formatSide(start);
+    if (!event.showEndTime || end.getTime() === start.getTime()) return startTime;
+    const endTime = formatSide(end);
     return `${hideStartMeridiem(startTime, start, end)}-${endTime}`;
   }
   function formatSingleDate(date) {
@@ -399,6 +404,13 @@
   function setDateFields(root, occurrence, event) {
     root.querySelectorAll(DATE_EL).forEach((el) => {
       const format = attr("MMMM D, YYYY", el.getAttribute("data-ix-events-date-format"));
+      if (isTimeFormat(format)) {
+        const text = formatTimeOnly(occurrence, event, format.trim().toUpperCase() === "TIME-SHORT");
+        el.style.display = text === null ? "none" : "";
+        el.textContent = text ?? "";
+        return;
+      }
+      el.style.display = "";
       el.textContent = isFullDateFormat(format) ? formatFullDate(occurrence, event) : formatOccurrenceDate(occurrence.start, format);
     });
   }
@@ -736,15 +748,24 @@
   var DEMO_NOTE = '[data-ix-events="demo-note"]';
   var HOVER_CARD = '[data-ix-events="hover-card"]';
   var SLUG_ATTR2 = "data-ix-events-slug";
-  var NAME_EL = '[data-ix-events="name"]';
-  var DATE_EL2 = '[data-ix-events="date"]';
-  var EVENT_TYPE_EL = '[data-ix-events="event-type"]';
-  var SHORT_DESC_EL = '[data-ix-events="short-description"]';
-  var LOCATION_EL = '[data-ix-events="location"]';
-  var ADDRESS_EL = '[data-ix-events="address"]';
-  var TIMEZONE_EL = '[data-ix-events="timezone"]';
   var DISABLED_CLASS2 = "is-disabled";
   var HIDDEN_CLASS = "u-display-none";
+  var PILL_TEXT_FIELDS = {
+    name: (event) => event.name,
+    slug: (event) => event.slug,
+    "event-type": (event) => event.eventType,
+    "short-description": (event) => event.shortDescription,
+    location: (event) => event.location,
+    address: (event) => event.address,
+    timezone: (event) => event.timezone,
+    "show-start-time": (event) => String(event.showStartTime),
+    "show-end-time": (event) => String(event.showEndTime),
+    "show-end-date": (event) => String(event.showEndDate),
+    "recurring-frequency": (event) => event.recurringFrequency,
+    "recurring-interval": (event) => String(event.recurringInterval),
+    "recurring-days": (event) => event.recurringDays.join(", "),
+    "recurring-skip-dates": (event) => event.recurringSkipDates.join(", ")
+  };
   var DOW_SHORT2 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   var calendar = function() {
     const wraps = [...document.querySelectorAll(WRAP2)].filter(
@@ -773,7 +794,6 @@
     if (!["hide", "expand", "show"].includes(overflowMode)) overflowMode = "hide";
     const showOutsideMonthEvents = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID2}-show-outside-month`));
     const hideInactiveRow = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID2}-hide-inactive-row`));
-    const showEndTime = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID2}-show-end-time`));
     const label = wrap.querySelector(LABEL2);
     const prevBtn = wrap.querySelector(PREV_BTN2);
     const nextBtn = wrap.querySelector(NEXT_BTN2);
@@ -844,7 +864,6 @@
         expandedRows,
         showOutsideMonthEvents,
         hideInactiveRow,
-        showEndTime,
         hoverState,
         events: state.events,
         today
@@ -972,7 +991,6 @@
     expandedRows,
     showOutsideMonthEvents,
     hideInactiveRow,
-    showEndTime,
     hoverState,
     events,
     today
@@ -1068,7 +1086,7 @@
           nextLane++;
         }
         const pos = dayIndex === seg.startIndex && dayIndex === seg.endIndex ? "single" : dayIndex === seg.startIndex ? "start" : dayIndex === seg.endIndex ? "end" : "middle";
-        const pill = createPill(pillTemplate, seg, pos, linkFormat, showEndTime, `cal-${dayIndex}-${seg.lane}`);
+        const pill = createPill(pillTemplate, seg, pos, linkFormat, `cal-${dayIndex}-${seg.lane}`);
         pillsEl.appendChild(pill);
         const card = hoverCardsBySlug.get(seg.event.slug);
         if (!card) unmatchedSlugs.add(seg.event.slug);
@@ -1164,24 +1182,15 @@
       });
     });
   }
-  function createPill(pillTemplate, segment, pos, linkFormat, showEndTime, suffix) {
+  function createPill(pillTemplate, segment, pos, linkFormat, suffix) {
     const { event, occurrence } = segment;
     const clone = pillTemplate.cloneNode(true);
     uniquifyIds(clone, suffix);
     if (pos === "start" || pos === "single") {
       setDateFields(clone, occurrence, event);
-      setField(clone, NAME_EL, event.name);
-      setField(clone, EVENT_TYPE_EL, event.eventType);
-      setField(clone, SHORT_DESC_EL, event.shortDescription);
-      setField(clone, LOCATION_EL, event.location);
-      setField(clone, ADDRESS_EL, event.address);
-      setField(clone, TIMEZONE_EL, event.timezone);
-      const dateEl = clone.querySelector(DATE_EL2);
-      if (dateEl) {
-        const pillTime = formatPillTime(occurrence, event, showEndTime);
-        if (pillTime === null) dateEl.style.display = "none";
-        else dateEl.textContent = pillTime;
-      }
+      Object.entries(PILL_TEXT_FIELDS).forEach(([attrName, getValue]) => {
+        setField(clone, `[data-ix-events="${attrName}"]`, getValue(event));
+      });
     }
     clone.href = linkFormat.replace("{slug}", event.slug || "");
     clone.classList.add(`is-${pos}`);

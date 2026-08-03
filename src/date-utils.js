@@ -157,9 +157,9 @@ export function formatFullDate(occurrence, event) {
 // Drops the start time's am/pm suffix when it matches the end time's period
 // (e.g. "8-9pm" instead of "8pm-9pm") — except when the start is 12
 // (noon/midnight), since "12-1pm" would leave which meridiem the 12 itself
-// is in ambiguous. Shared by formatFullDate and formatPillTime, which each
-// format the individual start/end times differently (formatClockTime hides
-// :00, the pill's own "h:mma" convention keeps it) but want the same
+// is in ambiguous. Shared by formatFullDate and formatTimeOnly, which each
+// format the individual start/end times differently (TIME-SHORT/
+// formatClockTime hide :00, plain TIME keeps it) but want the same
 // collapsing rule layered on top either way.
 function hideStartMeridiem(startTimeText, start, end) {
   const startPeriod = start.getHours() >= 12 ? 'pm' : 'am';
@@ -168,22 +168,28 @@ function hideStartMeridiem(startTimeText, start, end) {
   return startPeriod === endPeriod && start12Hour !== 12 ? startTimeText.slice(0, -2) : startTimeText;
 }
 
-// A calendar pill's own time display — never the date itself, since the
-// pill already lives inside a specific day-cell. Returns null when nothing
-// should show at all (Show Start Time off, so the caller should hide the
-// element entirely), the plain "h:mma"-style start time when showEndTime
-// (the wrap-level data-ix-events-show-end-time option) is off, the event's
-// own Show End Time field is off, or there's no genuine duration to show a
-// range for, and an "8:00-9:30pm" / "8:00am-5:00pm" range otherwise — same
-// meridiem-collapsing rule as formatFullDate's range, but (matching the
-// pill's own single-time convention) always keeps the ":00" rather than
-// hiding it the way formatClockTime does.
-export function formatPillTime(occurrence, event, showEndTime) {
+export function isTimeFormat(format) {
+  const upper = format.trim().toUpperCase();
+  return upper === 'TIME' || upper === 'TIME-SHORT';
+}
+
+// "TIME"/"TIME-SHORT": composite formats for a date element that should show
+// only a time, never a date (e.g. a calendar pill, which already lives
+// inside a specific day-cell) — driven by the event's Show Start Time / Show
+// End Time flags rather than a token string, same spirit as FULLDATE but
+// time-only. Returns null when nothing should show at all (Show Start Time
+// off) — the caller (setDateFields) hides the element entirely in that case,
+// since there's no date fallback to fall back to the way FULLDATE has one.
+//   "TIME"       always keeps ":00"      — "8:00pm", "8:00-9:30pm", "8:00am-5:00pm"
+//   "TIME-SHORT" drops ":00" per side     — "8pm",    "9-10:15pm",   "7:30am-11:20pm"
+// Both apply the same meridiem-collapsing rule as FULLDATE's range.
+export function formatTimeOnly(occurrence, event, short) {
   if (!event.showStartTime) return null;
   const { start, end } = occurrence;
-  const startTime = formatOccurrenceDate(start, 'h:mma');
-  if (!showEndTime || !event.showEndTime || end.getTime() === start.getTime()) return startTime;
-  const endTime = formatOccurrenceDate(end, 'h:mma');
+  const formatSide = short ? formatClockTime : (date) => formatOccurrenceDate(date, 'h:mma');
+  const startTime = formatSide(start);
+  if (!event.showEndTime || end.getTime() === start.getTime()) return startTime;
+  const endTime = formatSide(end);
   return `${hideStartMeridiem(startTime, start, end)}-${endTime}`;
 }
 
@@ -208,12 +214,26 @@ function formatClockTime(date) {
 
 // Formats an occurrence's date fields — for a recurring event this is the
 // computed date/time of THAT occurrence itself, never the event's original
-// CMS start/end, so a "FULLDATE" range or the plain token formatter both
-// naturally reflect the right day even when recurring. Used by List View,
-// Feed View, and Calendar — all three tag date elements the same way.
+// CMS start/end, so a "FULLDATE"/"TIME"/"TIME-SHORT" composite or the plain
+// token formatter all naturally reflect the right day even when recurring.
+// Used by List View, Feed View, and Calendar — all four (pill, hover-card,
+// list/feed card) tag date elements the same way. "TIME"/"TIME-SHORT" are
+// the only formats that can return null (Show Start Time off, nothing to
+// show) — that hides the element entirely rather than leaving stale or
+// empty text; any other format always shows something, so the element is
+// explicitly un-hidden first in case a previous render (or a shared,
+// reused DOM node — see List View's duplicate-recurring="false" mode) had
+// hidden it.
 export function setDateFields(root, occurrence, event) {
   root.querySelectorAll(DATE_EL).forEach((el) => {
     const format = attr('MMMM D, YYYY', el.getAttribute('data-ix-events-date-format'));
+    if (isTimeFormat(format)) {
+      const text = formatTimeOnly(occurrence, event, format.trim().toUpperCase() === 'TIME-SHORT');
+      el.style.display = text === null ? 'none' : '';
+      el.textContent = text ?? '';
+      return;
+    }
+    el.style.display = '';
     el.textContent = isFullDateFormat(format)
       ? formatFullDate(occurrence, event)
       : formatOccurrenceDate(occurrence.start, format);

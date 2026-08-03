@@ -151,7 +151,7 @@ All `true`/`false` values above are case-insensitive (`"True"`, `"FALSE"`, etc. 
 
 | Attribute                     | Applied to                             | Values                                       | Default                   |
 | ----------------------------- | -------------------------------------- | -------------------------------------------- | ------------------------- |
-| `data-ix-events-date-format`  | the `[data-ix-events="date"]` element  | a format token string (below), or `FULLDATE` | `MMMM D, YYYY`            |
+| `data-ix-events-date-format`  | the `[data-ix-events="date"]` element  | a format token string (below), or `FULLDATE`, `TIME`, `TIME-SHORT` | `MMMM D, YYYY`            |
 | `data-ix-events-label-format` | the `[data-ix-events="label"]` element | a format token string (below)                | smart default — see below |
 
 **`data-ix-events-date-format`** always formats the occurrence's own **start** date/time — for a recurring event, that's the specific date of _that_ occurrence, never the CMS item's original Start Date.
@@ -200,6 +200,21 @@ Instead of a token string, `data-ix-events-date-format="FULLDATE"` composes a fu
 | on              | on            | on            | `June 14-16th, 12pm-5pm` |
 
 A shared meridiem is dropped from the start time when it wouldn't be ambiguous (e.g. `8-9pm` not `8pm-9pm`), but kept on 12 (noon/midnight) since "12" alone is ambiguous. `FULLDATE` isn't available on `data-ix-events-label-format` — it needs a specific occurrence's show-flags, which a label isn't tied to.
+
+#### `TIME` / `TIME-SHORT` (date element only)
+
+Like `FULLDATE`, but time-only — never a date. Most useful on a calendar pill, which already lives inside a specific day-cell (repeating the date there would be redundant), but works on any date element. Driven by the same **Show Start Time** / **Show End Time** switches:
+
+| Show Start Time | Show End Time | `TIME` | `TIME-SHORT` |
+| --- | --- | --- | --- |
+| off | — | *(element hidden entirely)* | *(element hidden entirely)* |
+| on | off | `6:00pm` | `6pm` |
+| on | on (same meridiem) | `8:00-9:30pm` | `9-10:15pm` |
+| on | on (crosses meridiem) | `8:00am-5:00pm` | `7:30am-11:20pm` |
+
+`TIME` always keeps `:00`; `TIME-SHORT` drops it per side whenever that side lands exactly on the hour (independently — one side can be shortened while the other isn't, as in `9-10:15pm`). Both apply the same meridiem-collapsing rule as `FULLDATE`. Neither ever shows a range if the occurrence has no genuine duration (start equals end), even with both switches on.
+
+Unlike every other format, **`Show Start Time` off doesn't just change the output — it hides the element entirely** (`display: none`), reset back to visible (`display: ''`) the moment it would show something again. This matters specifically for calendar pills, which are freshly cloned from the template on every render, but also applies to any reused, non-cloned date element (e.g. List View's `duplicate-recurring="false"` mode, which keeps the same original card across re-filters).
 
 ---
 
@@ -271,17 +286,29 @@ A working reference build lives at [`design/calendar-mockup.html`](design/calend
 | `data-ix-events="hover-card"` | Anywhere inside wrap | No | One per CMS event, matched to the hovered pill's event by slug. No specific container/wrapper role is required — every `hover-card` in the wrap is found directly. Build its content however you want — native Webflow CMS bindings (images, rich text) work here since, unlike the pill, this isn't a JS-cloned template. Author it with the mockup's default CSS (`opacity: 0; visibility: hidden;` — **not** `display: none`, since a fade/slide transition can't animate a display toggle) — JS toggles `is-active` on hover (fading and sliding it in — see [Hover card reveal](#hover-card-reveal) below), fills in its `[data-ix-events="date"]` element(s) with the specific hovered occurrence's date (the one field that can't come from a static per-event binding, since a recurring event's card doesn't know in advance which occurrence is being hovered), and positions it left-aligned with the hovered pill, directly below it if the pill is in the top half of the viewport or above it if the pill is in the bottom half, clamped so it never runs past any edge of the calendar as a whole. This is the one element in the whole component that's still `position: absolute` (permanently, even while hidden, so its size can be measured before it's shown) — it floats freely next to whichever pill is hovered, which can't be expressed as normal document flow. Its DOM position never changes on hover — only its inline `left`/`top` and its classes do; the only time it ever moves in the DOM at all is once, at init, if it needs rescuing from a hidden holder (next paragraph). **Must not** live inside a permanently-hidden template holder (e.g. one carrying `u-display-none`) at page load — if it does, the script automatically relocates it out to a direct child of `wrap` the first time it runs, so this fixes itself without a Designer change, but it's cleaner to just not nest it there in the first place. |
 | `data-ix-events-slug="{{wf:Slug}}"` | The hover-card itself, **or any of its ancestors** (up to and including the card) | Yes, somewhere in that chain | Binds the card to its event. If you're reusing a CMS Collection List (the same shape as List View's separate mode — one `data-ix-events-slug` per Collection Item, with the visible card as a child of that item), the slug can stay on the Collection Item wrapper; it doesn't need to be on the same element as `data-ix-events="hover-card"`. |
 
-**Pill (and hover-card) bindable child elements** — all optional; JS leaves an element alone if it isn't present, so you only need to include the fields you want to show:
+**Pill bindable child elements** — every plain-text field from the [hidden JSON embed](#hidden-json-embed), kebab-case; all optional, JS leaves an element alone if it isn't present, so you only need to include the ones you actually want visible. Booleans/numbers/CSV lists are all safe to bind directly — they're stringified (a CSV field like Recurring Days becomes `"Tue, Thu"`) before being dropped into `textContent`:
 
 | Attribute | Source |
 | --- | --- |
-| `data-ix-events="name"` | Event name |
-| `data-ix-events="event-type"` | Event Type field |
-| `data-ix-events="short-description"` | Short Description field |
-| `data-ix-events="location"` | Location Name field |
-| `data-ix-events="address"` | Address field |
-| `data-ix-events="timezone"` | Timezone field |
-| `data-ix-events="date"` | On the **hover-card**: same convention as List View/Feed View — a format string via `data-ix-events-date-format` (incl. `FULLDATE`), see [Format attributes](#format-attributes). On the **pill**: no format string needed — always a time-only display driven entirely by the event's Show Start/End Time fields and the wrap's `data-ix-events-show-end-time` option, see [Pill time display](#pill-time-display) below. |
+| `data-ix-events="name"` | Name |
+| `data-ix-events="slug"` | Slug |
+| `data-ix-events="event-type"` | Event Type |
+| `data-ix-events="short-description"` | Short Description |
+| `data-ix-events="location"` | Location Name |
+| `data-ix-events="address"` | Address |
+| `data-ix-events="timezone"` | Timezone |
+| `data-ix-events="show-start-time"` | Show Start Time (`"true"`/`"false"`) |
+| `data-ix-events="show-end-time"` | Show End Time (`"true"`/`"false"`) |
+| `data-ix-events="show-end-date"` | Show End Date (`"true"`/`"false"`) |
+| `data-ix-events="recurring-frequency"` | Recurring Frequency (e.g. `"Weekly"`, or `"None"`) |
+| `data-ix-events="recurring-interval"` | Recurring Interval |
+| `data-ix-events="recurring-days"` | Recurring Days, comma-joined (e.g. `"Tue, Thu"`) |
+| `data-ix-events="recurring-skip-dates"` | Recurring Skip Dates, comma-joined |
+| `data-ix-events="date"` | Time-only — see [`TIME` / `TIME-SHORT`](#time--time-short-date-element-only) above. |
+
+Date/time fields themselves (Start Date/Time, End Date/Time, Recurring End Date) aren't in this list — they need real formatting, not raw display, and are already covered by the `date` element above.
+
+The hover-card supports only `date` from this list (via a normal format string, same convention as List View/Feed View — see [Format attributes](#format-attributes)) — its other content (name, images, location, etc.) is expected to come from native Webflow CMS bindings, since unlike the pill it isn't a JS-cloned template.
 
 ### Option attributes (all on the `wrap` element)
 
@@ -296,7 +323,6 @@ A working reference build lives at [`design/calendar-mockup.html`](design/calend
 | `data-ix-events-overflow-items` | `expand` \| `hide` \| `show` | `expand` | What happens to lanes beyond `day-pill-limit` — see [Overflow behavior](#overflow-behavior) below. |
 | `data-ix-events-show-outside-month` | `true` \| `false` | `false` | `range="month"` only. `false` — occurrences are never added to the leading/trailing days from adjacent months (a multi-day event is clipped to just its portion inside the active month). `true` — outside days get occurrences exactly like any other visible day. No effect on `range="week"`. |
 | `data-ix-events-hide-inactive-row` | `true` \| `false` | `false` | `range="month"` only. `true` — the grid's 6th row (`day-cell`s 35-41) is hidden whenever every day in it belongs to the next month, i.e. the active month only needed 5 rows. Re-checked on every render, since which months need 5 vs. 6 rows changes as you navigate. No effect on `range="week"`. |
-| `data-ix-events-show-end-time` | `true` \| `false` | `false` | Wrap-level gate on whether a pill's time can ever become a range — see [Pill time display](#pill-time-display) below. |
 
 `data-ix-events-duplicate-recurring` doesn't apply to Calendar — a date grid has no equivalent of "show one card regardless of occurrence count," every occurrence in view always gets its own pill.
 
@@ -342,16 +368,6 @@ The hover card's DOM position never changes — it's the same element in the sam
 | `expand` (default) | Same "+N more" text as `hide`, but clickable. Up to `day-pill-limit` lanes render; overflowing days get a clickable `"+N more"` in `day-more`. Clicking any day's trigger reveals **that whole week-row's** hidden lanes (not just the clicked day, since lanes are row-scoped) — every day-cell in that row grows to fit them. Resets the next time the active month/week changes. |
 | `hide` | Up to `day-pill-limit` lanes render. Anything beyond that folds into a static `"+N more"` in the overflowing day's `day-more` element — those extra lanes are never rendered at all (not even as spacers), so the day-cell never grows past what the limit needs. Not clickable. |
 | `show` | `day-pill-limit` is bypassed entirely — every lane a row actually needs renders immediately. `day-more` never shows anything in this mode. |
-
-### Pill time display
-
-A pill's `[data-ix-events="date"]` element is always a **time** display, never a date — the pill already lives inside a specific day-cell, so repeating the date itself would be redundant. `createPill()` overrides whatever `data-ix-events-date-format` is set on that element (there's no need to set one at all) with one of three outcomes:
-
-- **Hidden entirely** — whenever that specific event's own CMS **Show Start Time** field is off. This is unconditional; the wrap-level option below has no effect on it.
-- **A single start time** (`"6:00pm"`) — the default whenever Show Start Time is on: either `data-ix-events-show-end-time` is off on the wrap, or the individual event's own **Show End Time** field is off, or the occurrence has no genuine duration (start equals end).
-- **A start-end range** (`"8:00-9:30pm"`, or `"8:00am-5:00pm"` when the two times cross the noon/midnight boundary) — only when **both** `data-ix-events-show-end-time="true"` on the wrap **and** that event's own Show End Time field are on. The wrap-level option exists as a site-wide gate — some instances may want ranges shown wherever an event allows it, others may want every pill to stay a single time regardless of what any individual event's field says.
-
-The range's meridiem-collapsing rule matches `FULLDATE`'s (see [Format tokens](#format-tokens)) — a shared `am`/`pm` is dropped from the start time (`"8:00-9:30pm"`, not `"8:00pm-9:30pm"`) unless the start is 12 (noon/midnight), which always keeps its own meridiem to avoid ambiguity. Unlike `FULLDATE`'s time formatting (which hides `:00` for on-the-hour times), the pill's format always keeps it, matching its own single-time convention.
 
 ### Outside-month events
 

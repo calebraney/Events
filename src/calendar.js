@@ -1,7 +1,7 @@
 import { attr, uniquifyIds } from './utilities';
 import { getOccurrences } from './recurrence';
 import { whenEvents } from './event-data';
-import { startOfDay, addDays, anchorFor, getRangeBounds, stepCurrent, formatOccurrenceDate, formatWeekLabel, setDateFields, formatPillTime } from './date-utils';
+import { startOfDay, addDays, anchorFor, getRangeBounds, stepCurrent, formatOccurrenceDate, formatWeekLabel, setDateFields } from './date-utils';
 
 // ============================================================================
 // calendar: month/week-grid Calendar (data-ix-events-layout="calendar")
@@ -36,8 +36,16 @@ import { startOfDay, addDays, anchorFor, getRangeBounds, stepCurrent, formatOccu
 //     [data-ix-events="calendar-pill"]        hidden template, cloned once
 //                                               per day a segment covers.
 //                                               Root is an <a>; may contain:
-//       [data-ix-events="name"|"event-type"|"short-description"|"location"
-//                        |"address"|"timezone"|"date"]
+//       [data-ix-events="name"|"slug"|"event-type"|"short-description"
+//                        |"location"|"address"|"timezone"|"show-start-time"
+//                        |"show-end-time"|"show-end-date"
+//                        |"recurring-frequency"|"recurring-interval"
+//                        |"recurring-days"|"recurring-skip-dates"]
+//                                               plain text, see PILL_TEXT_FIELDS
+//       [data-ix-events="date"]                time-only — set
+//                                               data-ix-events-date-format to
+//                                               "TIME"/"TIME-SHORT" (or a
+//                                               plain token string) on it
 //     [data-ix-events="calendar-pill-spacer"] hidden template, cloned to
 //                                               keep lanes aligned across a
 //                                               row (see rendering model)
@@ -84,19 +92,6 @@ import { startOfDay, addDays, anchorFor, getRangeBounds, stepCurrent, formatOccu
 //     month only needed 5 rows to lay out), so the grid doesn't carry a
 //     trailing blank-looking row. Re-evaluated on every render, since
 //     whether a given month needs 5 or 6 rows changes as you navigate.
-//   data-ix-events-show-end-time="false" (default) | "true"
-//     controls whether a pill's own time display can ever become a range
-//     ("8:00-9:30pm"/"8:00am-5:00pm") instead of a single start time. A
-//     pill's [data-ix-events="date"] is always a time-only display (see
-//     createPill) — hidden entirely when an event's own Show Start Time
-//     field is off, regardless of this option; shown as a range only when
-//     BOTH this wrap-level option is true AND that specific event's own
-//     Show End Time field is also true (and it has a genuine duration —
-//     an instant event with no distinct end time never shows a range
-//     either way). This wrap-level gate exists because some instances may
-//     want end times shown site-wide, and others may want to respect only
-//     what's set per-event, or never show a range regardless of any
-//     individual event's own field.
 //
 // Rendering model: every occurrence (single- or multi-day) is clipped to the
 // visible day cells, split into one segment per week-row it crosses, and
@@ -154,15 +149,33 @@ const LOADING = '[data-ix-events="loading"]';
 const DEMO_NOTE = '[data-ix-events="demo-note"]';
 const HOVER_CARD = '[data-ix-events="hover-card"]';
 const SLUG_ATTR = 'data-ix-events-slug';
-const NAME_EL = '[data-ix-events="name"]';
-const DATE_EL = '[data-ix-events="date"]';
-const EVENT_TYPE_EL = '[data-ix-events="event-type"]';
-const SHORT_DESC_EL = '[data-ix-events="short-description"]';
-const LOCATION_EL = '[data-ix-events="location"]';
-const ADDRESS_EL = '[data-ix-events="address"]';
-const TIMEZONE_EL = '[data-ix-events="timezone"]';
 const DISABLED_CLASS = 'is-disabled';
 const HIDDEN_CLASS = 'u-display-none';
+
+// Every plain-text field a pill can bind, kebab-case attribute name ->
+// reader off the parsed `event` object (see parseEventFromJSON in
+// recurrence.js for the full shape). Booleans/numbers/arrays are stringified
+// so they're always safe to drop straight into textContent — arrays (the
+// two recurring-* CSV fields) join with ", ". Date/time fields aren't here:
+// they need real formatting, not raw display, and are already covered by
+// the `date` element + TIME/TIME-SHORT/FULLDATE/token formats (see
+// setDateFields in date-utils.js).
+const PILL_TEXT_FIELDS = {
+  name: (event) => event.name,
+  slug: (event) => event.slug,
+  'event-type': (event) => event.eventType,
+  'short-description': (event) => event.shortDescription,
+  location: (event) => event.location,
+  address: (event) => event.address,
+  timezone: (event) => event.timezone,
+  'show-start-time': (event) => String(event.showStartTime),
+  'show-end-time': (event) => String(event.showEndTime),
+  'show-end-date': (event) => String(event.showEndDate),
+  'recurring-frequency': (event) => event.recurringFrequency,
+  'recurring-interval': (event) => String(event.recurringInterval),
+  'recurring-days': (event) => event.recurringDays.join(', '),
+  'recurring-skip-dates': (event) => event.recurringSkipDates.join(', '),
+};
 
 const DOW_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -197,7 +210,6 @@ function initCalendar(wrap) {
   if (!['hide', 'expand', 'show'].includes(overflowMode)) overflowMode = 'hide';
   const showOutsideMonthEvents = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID}-show-outside-month`));
   const hideInactiveRow = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID}-hide-inactive-row`));
-  const showEndTime = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID}-show-end-time`));
 
   const label = wrap.querySelector(LABEL);
   const prevBtn = wrap.querySelector(PREV_BTN);
@@ -283,7 +295,6 @@ function initCalendar(wrap) {
       expandedRows,
       showOutsideMonthEvents,
       hideInactiveRow,
-      showEndTime,
       hoverState,
       events: state.events,
       today,
@@ -527,7 +538,6 @@ function renderGrid({
   expandedRows,
   showOutsideMonthEvents,
   hideInactiveRow,
-  showEndTime,
   hoverState,
   events,
   today,
@@ -665,7 +675,7 @@ function renderGrid({
             : dayIndex === seg.endIndex
               ? 'end'
               : 'middle';
-      const pill = createPill(pillTemplate, seg, pos, linkFormat, showEndTime, `cal-${dayIndex}-${seg.lane}`);
+      const pill = createPill(pillTemplate, seg, pos, linkFormat, `cal-${dayIndex}-${seg.lane}`);
       pillsEl.appendChild(pill);
       // Always attach, even if no card currently matches, so a mouseenter
       // always logs something — otherwise a slug-matching problem looks
@@ -802,33 +812,19 @@ function assignLanes(segments) {
 // Creates one pill PIECE for a single day-cell within a segment's span. Only
 // the is-start/is-single piece (pos) carries real content — is-middle/
 // is-end pieces stay empty so they render as a plain colored continuation
-// of the bar (see the mockup's negative-margin bridging CSS).
-function createPill(pillTemplate, segment, pos, linkFormat, showEndTime, suffix) {
+// of the bar (see the mockup's negative-margin bridging CSS). The date/time
+// element is handled generically by setDateFields — set
+// data-ix-events-date-format="TIME" or "TIME-SHORT" on it in the Designer
+// for a time-only display driven by Show Start/End Time (see date-utils.js).
+function createPill(pillTemplate, segment, pos, linkFormat, suffix) {
   const { event, occurrence } = segment;
   const clone = pillTemplate.cloneNode(true);
   uniquifyIds(clone, suffix);
   if (pos === 'start' || pos === 'single') {
     setDateFields(clone, occurrence, event);
-    setField(clone, NAME_EL, event.name);
-    setField(clone, EVENT_TYPE_EL, event.eventType);
-    setField(clone, SHORT_DESC_EL, event.shortDescription);
-    setField(clone, LOCATION_EL, event.location);
-    setField(clone, ADDRESS_EL, event.address);
-    setField(clone, TIMEZONE_EL, event.timezone);
-    // The pill's own [data-ix-events="date"] is always a TIME display (the
-    // pill already lives inside a specific day-cell, so repeating the date
-    // itself would be redundant) — overrides whatever setDateFields just
-    // set from the element's own data-ix-events-date-format, since a static
-    // format string can't express "hidden, single time, or a range"
-    // dynamically. Hidden entirely when the event's own Show Start Time is
-    // off; a start-end range only when the wrap opts in via
-    // data-ix-events-show-end-time AND the event's own Show End Time is on.
-    const dateEl = clone.querySelector(DATE_EL);
-    if (dateEl) {
-      const pillTime = formatPillTime(occurrence, event, showEndTime);
-      if (pillTime === null) dateEl.style.display = 'none';
-      else dateEl.textContent = pillTime;
-    }
+    Object.entries(PILL_TEXT_FIELDS).forEach(([attrName, getValue]) => {
+      setField(clone, `[data-ix-events="${attrName}"]`, getValue(event));
+    });
   }
   clone.href = linkFormat.replace('{slug}', event.slug || '');
   clone.classList.add(`is-${pos}`);

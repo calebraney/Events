@@ -1157,11 +1157,19 @@
 
       <a href="#" class="calendar_pill_wrap" data-ix-events="calendar-pill">
         <div class="calendar_pill_name u-text-style-small" data-ix-events="name"></div>
-        <!-- No data-ix-events-date-format needed here — a pill's own date
-             element is always a time-only display, driven entirely by the
-             event's Show Start/End Time fields and the wrap's
-             data-ix-events-show-end-time option (see calendar.js). -->
-        <div class="calendar_pill_date u-text-style-small" data-ix-events="date"></div>
+        <!-- "TIME" -> "6:00pm" / "8:00-9:30pm" / "8:00am-5:00pm" (always
+             keeps :00). "TIME-SHORT" does the same but drops :00 per side
+             when it's on the hour -> "6pm" / "9-10:15pm" / "7:30am-11:20pm".
+             Either way: hidden entirely whenever this event's own Show
+             Start Time field is off, and only becomes a range when its own
+             Show End Time field is also on. A plain token string or
+             "FULLDATE" also both work here, same as any other date element
+             — see README §4. -->
+        <div
+          class="calendar_pill_date u-text-style-small"
+          data-ix-events="date"
+          data-ix-events-date-format="TIME"
+        ></div>
       </a>
 
       <div class="calendar_pill_spacer" data-ix-events="calendar-pill-spacer"></div>
@@ -1343,11 +1351,19 @@
 
       <a href="#" class="calendar_pill_wrap" data-ix-events="calendar-pill">
         <div class="calendar_pill_name u-text-style-small" data-ix-events="name"></div>
-        <!-- No data-ix-events-date-format needed here — a pill's own date
-             element is always a time-only display, driven entirely by the
-             event's Show Start/End Time fields and the wrap's
-             data-ix-events-show-end-time option (see calendar.js). -->
-        <div class="calendar_pill_date u-text-style-small" data-ix-events="date"></div>
+        <!-- "TIME" -> "6:00pm" / "8:00-9:30pm" / "8:00am-5:00pm" (always
+             keeps :00). "TIME-SHORT" does the same but drops :00 per side
+             when it's on the hour -> "6pm" / "9-10:15pm" / "7:30am-11:20pm".
+             Either way: hidden entirely whenever this event's own Show
+             Start Time field is off, and only becomes a range when its own
+             Show End Time field is also on. A plain token string or
+             "FULLDATE" also both work here, same as any other date element
+             — see README §4. -->
+        <div
+          class="calendar_pill_date u-text-style-small"
+          data-ix-events="date"
+          data-ix-events-date-format="TIME"
+        ></div>
       </a>
 
       <div class="calendar_pill_spacer" data-ix-events="calendar-pill-spacer"></div>
