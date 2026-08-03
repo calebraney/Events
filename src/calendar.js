@@ -113,11 +113,14 @@ import { startOfDay, addDays, anchorFor, getRangeBounds, stepCurrent, formatOccu
 // pill's actual text content — is-middle/is-end pieces render as an empty
 // colored bar for visual continuity.
 //
-// Within a row, multi-day occurrences are lane-assigned before same-start
-// single-day ones (see assignLanes), so they claim the lowest lane numbers
-// and always render at the top of each day-cell's pill stack — this is what
-// keeps a multi-day bar's pieces connecting seamlessly across cells instead
-// of landing under a single-day event that happened to claim a lower lane.
+// Within a row, lanes are assigned purely by start index (then by span
+// length descending as a same-start tiebreaker only — see assignLanes) —
+// NOT by multi-day-ness. A segment reuses the lowest lane whose previous
+// occupant has already ended, regardless of whether either segment is
+// multi-day, so two genuinely non-overlapping events (a single-day one on
+// one day, a multi-day one starting later and never touching that day)
+// naturally end up sharing lane 0 instead of one being pushed into a higher
+// lane — and needing a spacer — for no real reason.
 //
 // Vertical lane alignment across a row (so a bar reads as one straight band)
 // depends on every pill/spacer sharing the same fixed height (--pill-height
@@ -611,10 +614,6 @@ function renderGrid({
         segments.push({
           ...seg,
           pos: all.length === 1 ? 'single' : i === 0 ? 'start' : i === all.length - 1 ? 'end' : 'middle',
-          // Based on the occurrence's true start/end, not this (possibly
-          // row-clipped) segment's own span — see assignLanes for why this
-          // matters even for a segment that only covers one visible day.
-          isMultiDay: !isSameDay(occurrence.start, occurrence.end),
           event,
           occurrence,
         });
@@ -772,13 +771,26 @@ function splitIntoSegments(startIndex, endIndex) {
 }
 
 // Greedy lane assignment within each week-row so overlapping segments stack
-// into separate lanes instead of colliding. Mutates each segment with `.lane`.
-// Multi-day occurrences are sorted first (ahead of same-start-day single-day
-// events), so they greedily claim the lowest lane numbers — since a pill's
-// lane is what keeps its pieces aligned across day-cells, this keeps
-// multi-day bars pinned to the top of the stack and reading as one seamless
-// connected bar, rather than landing under whatever single-day event happens
-// to have claimed a lower lane first.
+// into separate lanes instead of colliding, while non-overlapping segments
+// share a lane whenever possible. Mutates each segment with `.lane`. Sorted
+// by start index first, then by span length descending as a tiebreaker only
+// (so when two segments genuinely start on the same day, the longer one
+// gets first pick of the lowest lane) — deliberately NOT sorted by
+// multi-day-ness first. An earlier revision prioritized multi-day segments
+// into the lowest lanes unconditionally, regardless of start order, so
+// they'd always render at the top of the stack — but that meant a
+// single-day event with no real overlap could still get displaced out of
+// lane 0 by a multi-day event elsewhere in the same row that starts later
+// and never even touches that day, forcing an unnecessary
+// [data-ix-events="calendar-pill-spacer"] above it purely for alignment
+// with a lane it has nothing to do with (a real reported bug — visible as
+// extra blank space above a pill for no apparent reason). Plain
+// start-then-span-length sorting doesn't have that failure mode: the
+// greedy reuse check below (`laneEnds[lane] < seg.startIndex`) already
+// lets a later, non-overlapping segment reuse an earlier one's lane
+// correctly regardless of which one is multi-day, and a multi-day segment
+// that DOES overlap an earlier single-day one still naturally lands in a
+// higher lane only where that's actually necessary — never elsewhere.
 function assignLanes(segments) {
   const byRow = new Map();
   segments.forEach((seg) => {
@@ -787,12 +799,7 @@ function assignLanes(segments) {
     byRow.get(row).push(seg);
   });
   byRow.forEach((rowSegments) => {
-    rowSegments.sort(
-      (a, b) =>
-        (b.isMultiDay ? 1 : 0) - (a.isMultiDay ? 1 : 0) ||
-        a.startIndex - b.startIndex ||
-        b.endIndex - b.startIndex - (a.endIndex - a.startIndex)
-    );
+    rowSegments.sort((a, b) => a.startIndex - b.startIndex || b.endIndex - b.startIndex - (a.endIndex - a.startIndex));
     const laneEnds = [];
     rowSegments.forEach((seg) => {
       let lane = laneEnds.findIndex((end) => end < seg.startIndex);

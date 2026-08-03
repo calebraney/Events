@@ -1044,10 +1044,6 @@
           segments.push({
             ...seg,
             pos: all.length === 1 ? "single" : i === 0 ? "start" : i === all.length - 1 ? "end" : "middle",
-            // Based on the occurrence's true start/end, not this (possibly
-            // row-clipped) segment's own span — see assignLanes for why this
-            // matters even for a segment that only covers one visible day.
-            isMultiDay: !isSameDay(occurrence.start, occurrence.end),
             event,
             occurrence
           });
@@ -1166,9 +1162,7 @@
       byRow.get(row).push(seg);
     });
     byRow.forEach((rowSegments) => {
-      rowSegments.sort(
-        (a, b) => (b.isMultiDay ? 1 : 0) - (a.isMultiDay ? 1 : 0) || a.startIndex - b.startIndex || b.endIndex - b.startIndex - (a.endIndex - a.startIndex)
-      );
+      rowSegments.sort((a, b) => a.startIndex - b.startIndex || b.endIndex - b.startIndex - (a.endIndex - a.startIndex));
       const laneEnds = [];
       rowSegments.forEach((seg) => {
         let lane = laneEnds.findIndex((end) => end < seg.startIndex);
