@@ -1,7 +1,7 @@
 import { attr, uniquifyIds } from './utilities';
 import { getOccurrences } from './recurrence';
 import { whenEvents } from './event-data';
-import { startOfDay, addDays, anchorFor, getRangeBounds, stepCurrent, formatOccurrenceDate, formatWeekLabel, setDateFields } from './date-utils';
+import { startOfDay, addDays, anchorFor, getRangeBounds, stepCurrent, formatOccurrenceDate, formatWeekLabel, setDateFields, formatPillTime } from './date-utils';
 
 // ============================================================================
 // calendar: month/week-grid Calendar (data-ix-events-layout="calendar")
@@ -84,6 +84,19 @@ import { startOfDay, addDays, anchorFor, getRangeBounds, stepCurrent, formatOccu
 //     month only needed 5 rows to lay out), so the grid doesn't carry a
 //     trailing blank-looking row. Re-evaluated on every render, since
 //     whether a given month needs 5 or 6 rows changes as you navigate.
+//   data-ix-events-show-end-time="false" (default) | "true"
+//     controls whether a pill's own time display can ever become a range
+//     ("8:00-9:30pm"/"8:00am-5:00pm") instead of a single start time. A
+//     pill's [data-ix-events="date"] is always a time-only display (see
+//     createPill) — hidden entirely when an event's own Show Start Time
+//     field is off, regardless of this option; shown as a range only when
+//     BOTH this wrap-level option is true AND that specific event's own
+//     Show End Time field is also true (and it has a genuine duration —
+//     an instant event with no distinct end time never shows a range
+//     either way). This wrap-level gate exists because some instances may
+//     want end times shown site-wide, and others may want to respect only
+//     what's set per-event, or never show a range regardless of any
+//     individual event's own field.
 //
 // Rendering model: every occurrence (single- or multi-day) is clipped to the
 // visible day cells, split into one segment per week-row it crosses, and
@@ -142,6 +155,7 @@ const DEMO_NOTE = '[data-ix-events="demo-note"]';
 const HOVER_CARD = '[data-ix-events="hover-card"]';
 const SLUG_ATTR = 'data-ix-events-slug';
 const NAME_EL = '[data-ix-events="name"]';
+const DATE_EL = '[data-ix-events="date"]';
 const EVENT_TYPE_EL = '[data-ix-events="event-type"]';
 const SHORT_DESC_EL = '[data-ix-events="short-description"]';
 const LOCATION_EL = '[data-ix-events="location"]';
@@ -183,6 +197,7 @@ function initCalendar(wrap) {
   if (!['hide', 'expand', 'show'].includes(overflowMode)) overflowMode = 'hide';
   const showOutsideMonthEvents = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID}-show-outside-month`));
   const hideInactiveRow = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID}-hide-inactive-row`));
+  const showEndTime = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID}-show-end-time`));
 
   const label = wrap.querySelector(LABEL);
   const prevBtn = wrap.querySelector(PREV_BTN);
@@ -234,6 +249,10 @@ function initCalendar(wrap) {
   // Row indices are meaningless once the active month/week changes, so this
   // resets on every navigation (see the nav click handlers below).
   const expandedRows = new Set();
+  // Tracks whichever hover card is currently shown (at most one, ever) so a
+  // new mouseenter can force-hide a previous card even if its own
+  // mouseleave was somehow missed — see the pill listeners in renderGrid().
+  const hoverState = { activeCard: null };
 
   function updateNavState() {
     if (prevBtn) prevBtn.classList.toggle(DISABLED_CLASS, !canGoPrev(current));
@@ -264,12 +283,25 @@ function initCalendar(wrap) {
       expandedRows,
       showOutsideMonthEvents,
       hideInactiveRow,
+      showEndTime,
+      hoverState,
       events: state.events,
       today,
     });
   }
 
   refresh(); // render an empty grid immediately, then fill in once events load
+
+  // Backstop for hoverState.activeCard: if the pointer leaves the grid
+  // entirely without a pill's own mouseleave having fired first (e.g. a
+  // very fast pointer move, or the browser skipping a hit-test), this still
+  // guarantees nothing is left stuck visible.
+  grid.addEventListener('mouseleave', () => {
+    if (hoverState.activeCard) {
+      hideHoverCard(hoverState.activeCard);
+      hoverState.activeCard = null;
+    }
+  });
 
   if (overflowMode === 'expand') {
     // Delegated once, not re-bound per render — lanes are row-scoped, so
@@ -324,6 +356,25 @@ function setWeekdayLabels(weekdayLabels, weekStartDay) {
 
 // ── Hover cards ──────────────────────────────────────────────────────────
 
+// getComputedStyle().getPropertyValue() on a custom property returns the RAW
+// declared string (e.g. "3rem"), not a resolved pixel number — parseFloat()
+// alone silently drops the unit, treating "3rem" as if it were "3px" (i.e.
+// effectively inert, since 1rem vs. 10rem would only ever differ by a few
+// px). Converts rem using the root font-size; px passes through as-is.
+// Returns null (not 0) for an empty/unset value so callers can tell "unset"
+// apart from "explicitly 0" and apply their own fallback.
+function cssLengthToPx(value) {
+  const trimmed = (value || '').trim();
+  if (!trimmed) return null;
+  if (trimmed.endsWith('rem')) {
+    const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+    const num = parseFloat(trimmed);
+    return Number.isNaN(num) ? null : num * rootFontSize;
+  }
+  const num = parseFloat(trimmed);
+  return Number.isNaN(num) ? null : num;
+}
+
 // Cards don't need a dedicated [data-ix-events="hover-cards"] wrapper — any
 // [data-ix-events="hover-card"] anywhere in the wrap is found directly. The
 // slug can live on the card itself OR any ancestor up to the card (e.g. a
@@ -371,6 +422,27 @@ function unwrapFromHiddenAncestor(el, wrap) {
 function showHoverCard(card, occurrence, event, pillEl, wrap) {
   setDateFields(card, occurrence, event);
 
+  // is-above/is-below (and whatever transform they carry — translate,
+  // scale, anything the Designer adds) persist across a hide, since
+  // hideHoverCard() only ever removes is-active. Just removing them here
+  // isn't enough on its own, though: transform is covered by this
+  // element's own `transition: transform ...` (see the mockup CSS), so
+  // removing the class doesn't make the RENDERED transform snap to `none`
+  // — it starts a brand-new transition FROM whatever scaled/translated
+  // value was left over from the last time this card was shown, and
+  // getBoundingClientRect() reports whatever's actually rendered
+  // mid-transition, not the eventual target (unlike layout properties,
+  // transform changes aren't forced to complete by reading layout — that's
+  // the whole point of using transform for animation in the first place).
+  // Killing the transition inline, then forcing a reflow so the browser
+  // actually commits transform:none before we read anything, guarantees
+  // cardRect below is the card's true, fully-settled, untransformed size —
+  // regardless of what it was still animating from a moment ago. Restored
+  // right after measuring so the reveal itself still animates normally.
+  card.classList.remove('is-active', 'is-above', 'is-below');
+  card.style.transition = 'none';
+  void card.offsetHeight; // commit transition:none + the class removal above
+
   // Position relative to card.offsetParent — the nearest positioned
   // ancestor, i.e. exactly whichever element position:absolute actually
   // resolves against (see the .calendar_hover_card_wrap CSS rule in the
@@ -385,21 +457,32 @@ function showHoverCard(card, occurrence, event, pillEl, wrap) {
   const parentRect = parent.getBoundingClientRect();
   const targetRect = pillEl.getBoundingClientRect();
   const cardRect = card.getBoundingClientRect();
-  const gap = parseFloat(getComputedStyle(card).getPropertyValue('--hover-card-gap')) || 16;
+  const gap = cssLengthToPx(getComputedStyle(card).getPropertyValue('--hover-card-gap')) ?? 16;
+  card.style.transition = ''; // restore the CSS-defined transition for the reveal below
 
   // Left-align with the pill by default (not centered) — clamp so the card
   // never runs past the left or right edge of the calendar as a whole.
   const rawLeft = targetRect.left - parentRect.left;
   const left = Math.max(0, Math.min(rawLeft, parentRect.width - cardRect.width));
 
-  // Above if the pill sits in the top half of the *viewport*, below if it's
-  // in the bottom half — a literal viewport-relative rule (not "does it
-  // fit," which would flip inconsistently for cards of different heights).
-  // Either way, clamp the final top within the calendar's own bounds so a
-  // very tall card still can't run off the top/bottom of it.
+  // Vertical placement, in strict priority order:
+  //   1. Distance from the pill — always exactly `gap`, never less. The card
+  //      must never touch/cover the pill it's describing, full stop (an
+  //      overlapping card also breaks hovering itself, since it then sits on
+  //      top of the pill and intercepts the pointer, firing a premature
+  //      mouseleave).
+  //   2. Which side — above if the pill is in the top half of the
+  //      *viewport*, below if it's in the bottom half. Always honored;
+  //      never flipped based on available space, so the card is always on
+  //      the side you'd expect.
+  //   3. Staying within the calendar's own bounds — lowest priority, and
+  //      NOT enforced: if honoring 1 and 2 means the card runs past the
+  //      calendar's own top/bottom edge, that's accepted. The alternative
+  //      (clamping) is what caused the overlap bug in the first place — it
+  //      pushed the card back across the gap and into the pill whenever
+  //      there wasn't enough room on the preferred side.
   const showBelow = targetRect.top < window.innerHeight / 2;
-  let top = showBelow ? targetRect.bottom - parentRect.top + gap : targetRect.top - parentRect.top - cardRect.height - gap;
-  top = Math.max(0, Math.min(top, parentRect.height - cardRect.height));
+  const top = showBelow ? targetRect.bottom - parentRect.top + gap : targetRect.top - parentRect.top - cardRect.height - gap;
 
   console.log('[calendar] DEBUG showHoverCard — event:', event.name, '| left:', left, '| top:', top, '| showBelow:', showBelow, '| parent:', parent);
 
@@ -407,14 +490,15 @@ function showHoverCard(card, occurrence, event, pillEl, wrap) {
   card.style.top = `${top}px`;
 
   // is-above/is-below pick which direction the entrance slide comes from
-  // (see the mockup's CSS) — set BEFORE is-active, and separated from it by
-  // a frame, so the browser actually paints the offset/hidden starting
+  // (see the mockup's CSS) — set separately from is-active, and a frame
+  // ahead of it, so the browser actually paints the offset/hidden starting
   // state instead of collapsing straight to the resting state (which is
   // what happens if every class changes in one synchronous batch — a
   // transition needs two distinct painted states to interpolate between).
   // This only delays the CSS transition's start, never the positioning
-  // above, which is already applied synchronously.
-  card.classList.remove('is-active');
+  // above, which is already applied synchronously. (is-active was already
+  // cleared up front, before measuring — see the comment at the top of this
+  // function.)
   card.classList.toggle('is-above', !showBelow);
   card.classList.toggle('is-below', showBelow);
   void card.offsetHeight; // force layout so the above state is committed/painted
@@ -443,6 +527,8 @@ function renderGrid({
   expandedRows,
   showOutsideMonthEvents,
   hideInactiveRow,
+  showEndTime,
+  hoverState,
   events,
   today,
 }) {
@@ -579,7 +665,7 @@ function renderGrid({
             : dayIndex === seg.endIndex
               ? 'end'
               : 'middle';
-      const pill = createPill(pillTemplate, seg, pos, linkFormat, `cal-${dayIndex}-${seg.lane}`);
+      const pill = createPill(pillTemplate, seg, pos, linkFormat, showEndTime, `cal-${dayIndex}-${seg.lane}`);
       pillsEl.appendChild(pill);
       // Always attach, even if no card currently matches, so a mouseenter
       // always logs something — otherwise a slug-matching problem looks
@@ -588,9 +674,23 @@ function renderGrid({
       if (!card) unmatchedSlugs.add(seg.event.slug);
       pill.addEventListener('mouseenter', () => {
         console.log('[calendar] DEBUG pill mouseenter — event:', seg.event.name, '| slug:', seg.event.slug, '| card found:', !!card);
-        if (card) showHoverCard(card, seg.occurrence, seg.event, pill, wrap);
+        if (!card) return;
+        // Force-hide whatever was previously shown first — a defensive
+        // guarantee that at most one card is ever visible, even if some
+        // prior mouseleave was missed (e.g. because an earlier positioning
+        // bug let a card overlap and intercept pointer events for another
+        // pill — fixed above, but this stays as cheap insurance regardless).
+        if (hoverState.activeCard && hoverState.activeCard !== card) {
+          hideHoverCard(hoverState.activeCard);
+        }
+        hoverState.activeCard = card;
+        showHoverCard(card, seg.occurrence, seg.event, pill, wrap);
       });
-      pill.addEventListener('mouseleave', () => hideHoverCard(card));
+      pill.addEventListener('mouseleave', () => {
+        console.log('[calendar] DEBUG pill mouseleave — event:', seg.event.name);
+        hideHoverCard(card);
+        if (hoverState.activeCard === card) hoverState.activeCard = null;
+      });
       nextLane++;
     });
   });
@@ -703,7 +803,7 @@ function assignLanes(segments) {
 // the is-start/is-single piece (pos) carries real content — is-middle/
 // is-end pieces stay empty so they render as a plain colored continuation
 // of the bar (see the mockup's negative-margin bridging CSS).
-function createPill(pillTemplate, segment, pos, linkFormat, suffix) {
+function createPill(pillTemplate, segment, pos, linkFormat, showEndTime, suffix) {
   const { event, occurrence } = segment;
   const clone = pillTemplate.cloneNode(true);
   uniquifyIds(clone, suffix);
@@ -715,6 +815,20 @@ function createPill(pillTemplate, segment, pos, linkFormat, suffix) {
     setField(clone, LOCATION_EL, event.location);
     setField(clone, ADDRESS_EL, event.address);
     setField(clone, TIMEZONE_EL, event.timezone);
+    // The pill's own [data-ix-events="date"] is always a TIME display (the
+    // pill already lives inside a specific day-cell, so repeating the date
+    // itself would be redundant) — overrides whatever setDateFields just
+    // set from the element's own data-ix-events-date-format, since a static
+    // format string can't express "hidden, single time, or a range"
+    // dynamically. Hidden entirely when the event's own Show Start Time is
+    // off; a start-end range only when the wrap opts in via
+    // data-ix-events-show-end-time AND the event's own Show End Time is on.
+    const dateEl = clone.querySelector(DATE_EL);
+    if (dateEl) {
+      const pillTime = formatPillTime(occurrence, event, showEndTime);
+      if (pillTime === null) dateEl.style.display = 'none';
+      else dateEl.textContent = pillTime;
+    }
   }
   clone.href = linkFormat.replace('{slug}', event.slug || '');
   clone.classList.add(`is-${pos}`);

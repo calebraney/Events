@@ -151,13 +151,40 @@ export function formatFullDate(occurrence, event) {
 
   const startTime = formatClockTime(start);
   const endTime = formatClockTime(end);
+  return `${datePart}, ${hideStartMeridiem(startTime, start, end)}-${endTime}`;
+}
+
+// Drops the start time's am/pm suffix when it matches the end time's period
+// (e.g. "8-9pm" instead of "8pm-9pm") — except when the start is 12
+// (noon/midnight), since "12-1pm" would leave which meridiem the 12 itself
+// is in ambiguous. Shared by formatFullDate and formatPillTime, which each
+// format the individual start/end times differently (formatClockTime hides
+// :00, the pill's own "h:mma" convention keeps it) but want the same
+// collapsing rule layered on top either way.
+function hideStartMeridiem(startTimeText, start, end) {
   const startPeriod = start.getHours() >= 12 ? 'pm' : 'am';
   const endPeriod = end.getHours() >= 12 ? 'pm' : 'am';
   const start12Hour = start.getHours() % 12 || 12;
-  const hideStartPeriod = startPeriod === endPeriod && start12Hour !== 12;
-  const startTimeText = hideStartPeriod ? startTime.slice(0, -2) : startTime;
+  return startPeriod === endPeriod && start12Hour !== 12 ? startTimeText.slice(0, -2) : startTimeText;
+}
 
-  return `${datePart}, ${startTimeText}-${endTime}`;
+// A calendar pill's own time display — never the date itself, since the
+// pill already lives inside a specific day-cell. Returns null when nothing
+// should show at all (Show Start Time off, so the caller should hide the
+// element entirely), the plain "h:mma"-style start time when showEndTime
+// (the wrap-level data-ix-events-show-end-time option) is off, the event's
+// own Show End Time field is off, or there's no genuine duration to show a
+// range for, and an "8:00-9:30pm" / "8:00am-5:00pm" range otherwise — same
+// meridiem-collapsing rule as formatFullDate's range, but (matching the
+// pill's own single-time convention) always keeps the ":00" rather than
+// hiding it the way formatClockTime does.
+export function formatPillTime(occurrence, event, showEndTime) {
+  if (!event.showStartTime) return null;
+  const { start, end } = occurrence;
+  const startTime = formatOccurrenceDate(start, 'h:mma');
+  if (!showEndTime || !event.showEndTime || end.getTime() === start.getTime()) return startTime;
+  const endTime = formatOccurrenceDate(end, 'h:mma');
+  return `${hideStartMeridiem(startTime, start, end)}-${endTime}`;
 }
 
 function formatSingleDate(date) {

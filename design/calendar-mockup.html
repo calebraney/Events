@@ -772,8 +772,12 @@
       </div>
     </div>
 
-    <!-- Hover card, is-active -->
-    <div class="calendar_hover_card_wrap is-active">
+    <!-- Hover card, is-active + is-above (shown above its pill — this is
+         also the ONLY place is-above's CSS stays alive in the Designer;
+         is-above/is-below are 100% JS-applied at runtime otherwise, and
+         Webflow purges a combo class's CSS on publish if it isn't on any
+         element in the canvas — see the note at the top of this file). -->
+    <div class="calendar_hover_card_wrap is-active is-above">
       <div class="calendar_hover_card_img"></div>
       <div class="calendar_hover_card_content u-margin-trim">
         <div class="calendar_hover_card_title u-text-style-h6">Volunteer Week</div>
@@ -782,6 +786,20 @@
         <div class="calendar_hover_card_text u-text-style-small">
           Join us for a week of volunteer projects across the community — sign up for one day or all
           five.
+        </div>
+      </div>
+    </div>
+
+    <!-- Hover card, is-active + is-below (shown below its pill — same
+         purging note as above, this is is-below's only live example). -->
+    <div class="calendar_hover_card_wrap is-active is-below">
+      <div class="calendar_hover_card_img"></div>
+      <div class="calendar_hover_card_content u-margin-trim">
+        <div class="calendar_hover_card_title u-text-style-h6">Book Club</div>
+        <div class="calendar_hover_card_meta u-text-style-small">September 3rd, 7-8:30pm</div>
+        <div class="calendar_hover_card_meta u-text-style-small">Library, Room 2</div>
+        <div class="calendar_hover_card_text u-text-style-small">
+          This month's pick and discussion — new members always welcome.
         </div>
       </div>
     </div>
@@ -1139,11 +1157,11 @@
 
       <a href="#" class="calendar_pill_wrap" data-ix-events="calendar-pill">
         <div class="calendar_pill_name u-text-style-small" data-ix-events="name"></div>
-        <div
-          class="calendar_pill_date u-text-style-small"
-          data-ix-events="date"
-          data-ix-events-date-format="h:mma"
-        ></div>
+        <!-- No data-ix-events-date-format needed here — a pill's own date
+             element is always a time-only display, driven entirely by the
+             event's Show Start/End Time fields and the wrap's
+             data-ix-events-show-end-time option (see calendar.js). -->
+        <div class="calendar_pill_date u-text-style-small" data-ix-events="date"></div>
       </a>
 
       <div class="calendar_pill_spacer" data-ix-events="calendar-pill-spacer"></div>
@@ -1325,11 +1343,11 @@
 
       <a href="#" class="calendar_pill_wrap" data-ix-events="calendar-pill">
         <div class="calendar_pill_name u-text-style-small" data-ix-events="name"></div>
-        <div
-          class="calendar_pill_date u-text-style-small"
-          data-ix-events="date"
-          data-ix-events-date-format="h:mma"
-        ></div>
+        <!-- No data-ix-events-date-format needed here — a pill's own date
+             element is always a time-only display, driven entirely by the
+             event's Show Start/End Time fields and the wrap's
+             data-ix-events-show-end-time option (see calendar.js). -->
+        <div class="calendar_pill_date u-text-style-small" data-ix-events="date"></div>
       </a>
 
       <div class="calendar_pill_spacer" data-ix-events="calendar-pill-spacer"></div>

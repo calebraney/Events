@@ -364,12 +364,21 @@
     if (!showEndTime) return `${datePart} at ${formatClockTime(start)}`;
     const startTime = formatClockTime(start);
     const endTime = formatClockTime(end);
+    return `${datePart}, ${hideStartMeridiem(startTime, start, end)}-${endTime}`;
+  }
+  function hideStartMeridiem(startTimeText, start, end) {
     const startPeriod = start.getHours() >= 12 ? "pm" : "am";
     const endPeriod = end.getHours() >= 12 ? "pm" : "am";
     const start12Hour = start.getHours() % 12 || 12;
-    const hideStartPeriod = startPeriod === endPeriod && start12Hour !== 12;
-    const startTimeText = hideStartPeriod ? startTime.slice(0, -2) : startTime;
-    return `${datePart}, ${startTimeText}-${endTime}`;
+    return startPeriod === endPeriod && start12Hour !== 12 ? startTimeText.slice(0, -2) : startTimeText;
+  }
+  function formatPillTime(occurrence, event, showEndTime) {
+    if (!event.showStartTime) return null;
+    const { start, end } = occurrence;
+    const startTime = formatOccurrenceDate(start, "h:mma");
+    if (!showEndTime || !event.showEndTime || end.getTime() === start.getTime()) return startTime;
+    const endTime = formatOccurrenceDate(end, "h:mma");
+    return `${hideStartMeridiem(startTime, start, end)}-${endTime}`;
   }
   function formatSingleDate(date) {
     return `${MONTH_FULL[date.getMonth()]} ${ordinal(date.getDate())}`;
@@ -728,6 +737,7 @@
   var HOVER_CARD = '[data-ix-events="hover-card"]';
   var SLUG_ATTR2 = "data-ix-events-slug";
   var NAME_EL = '[data-ix-events="name"]';
+  var DATE_EL2 = '[data-ix-events="date"]';
   var EVENT_TYPE_EL = '[data-ix-events="event-type"]';
   var SHORT_DESC_EL = '[data-ix-events="short-description"]';
   var LOCATION_EL = '[data-ix-events="location"]';
@@ -763,6 +773,7 @@
     if (!["hide", "expand", "show"].includes(overflowMode)) overflowMode = "hide";
     const showOutsideMonthEvents = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID2}-show-outside-month`));
     const hideInactiveRow = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID2}-hide-inactive-row`));
+    const showEndTime = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID2}-show-end-time`));
     const label = wrap.querySelector(LABEL2);
     const prevBtn = wrap.querySelector(PREV_BTN2);
     const nextBtn = wrap.querySelector(NEXT_BTN2);
@@ -805,6 +816,7 @@
     let current = anchorFor(today, range, weekStartDay);
     let state = { events: [] };
     const expandedRows = /* @__PURE__ */ new Set();
+    const hoverState = { activeCard: null };
     function updateNavState() {
       if (prevBtn) prevBtn.classList.toggle(DISABLED_CLASS2, !canGoPrev(current));
       if (nextBtn) nextBtn.classList.toggle(DISABLED_CLASS2, !canGoNext(current));
@@ -832,11 +844,19 @@
         expandedRows,
         showOutsideMonthEvents,
         hideInactiveRow,
+        showEndTime,
+        hoverState,
         events: state.events,
         today
       });
     }
     refresh();
+    grid.addEventListener("mouseleave", () => {
+      if (hoverState.activeCard) {
+        hideHoverCard(hoverState.activeCard);
+        hoverState.activeCard = null;
+      }
+    });
     if (overflowMode === "expand") {
       grid.addEventListener("click", (e) => {
         const moreEl = e.target.closest(DAY_MORE);
@@ -879,6 +899,17 @@
       el.textContent = DOW_SHORT2[(weekStartDay + i) % 7];
     });
   }
+  function cssLengthToPx(value) {
+    const trimmed = (value || "").trim();
+    if (!trimmed) return null;
+    if (trimmed.endsWith("rem")) {
+      const rootFontSize = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+      const num2 = parseFloat(trimmed);
+      return Number.isNaN(num2) ? null : num2 * rootFontSize;
+    }
+    const num = parseFloat(trimmed);
+    return Number.isNaN(num) ? null : num;
+  }
   function buildHoverCardMap(wrap) {
     const map = /* @__PURE__ */ new Map();
     wrap.querySelectorAll(HOVER_CARD).forEach((card) => {
@@ -901,20 +932,22 @@
   }
   function showHoverCard(card, occurrence, event, pillEl, wrap) {
     setDateFields(card, occurrence, event);
+    card.classList.remove("is-active", "is-above", "is-below");
+    card.style.transition = "none";
+    void card.offsetHeight;
     const parent = card.offsetParent || wrap;
     const parentRect = parent.getBoundingClientRect();
     const targetRect = pillEl.getBoundingClientRect();
     const cardRect = card.getBoundingClientRect();
-    const gap = parseFloat(getComputedStyle(card).getPropertyValue("--hover-card-gap")) || 16;
+    const gap = cssLengthToPx(getComputedStyle(card).getPropertyValue("--hover-card-gap")) ?? 16;
+    card.style.transition = "";
     const rawLeft = targetRect.left - parentRect.left;
     const left = Math.max(0, Math.min(rawLeft, parentRect.width - cardRect.width));
     const showBelow = targetRect.top < window.innerHeight / 2;
-    let top = showBelow ? targetRect.bottom - parentRect.top + gap : targetRect.top - parentRect.top - cardRect.height - gap;
-    top = Math.max(0, Math.min(top, parentRect.height - cardRect.height));
+    const top = showBelow ? targetRect.bottom - parentRect.top + gap : targetRect.top - parentRect.top - cardRect.height - gap;
     console.log("[calendar] DEBUG showHoverCard \u2014 event:", event.name, "| left:", left, "| top:", top, "| showBelow:", showBelow, "| parent:", parent);
     card.style.left = `${left}px`;
     card.style.top = `${top}px`;
-    card.classList.remove("is-active");
     card.classList.toggle("is-above", !showBelow);
     card.classList.toggle("is-below", showBelow);
     void card.offsetHeight;
@@ -939,6 +972,8 @@
     expandedRows,
     showOutsideMonthEvents,
     hideInactiveRow,
+    showEndTime,
+    hoverState,
     events,
     today
   }) {
@@ -1033,15 +1068,24 @@
           nextLane++;
         }
         const pos = dayIndex === seg.startIndex && dayIndex === seg.endIndex ? "single" : dayIndex === seg.startIndex ? "start" : dayIndex === seg.endIndex ? "end" : "middle";
-        const pill = createPill(pillTemplate, seg, pos, linkFormat, `cal-${dayIndex}-${seg.lane}`);
+        const pill = createPill(pillTemplate, seg, pos, linkFormat, showEndTime, `cal-${dayIndex}-${seg.lane}`);
         pillsEl.appendChild(pill);
         const card = hoverCardsBySlug.get(seg.event.slug);
         if (!card) unmatchedSlugs.add(seg.event.slug);
         pill.addEventListener("mouseenter", () => {
           console.log("[calendar] DEBUG pill mouseenter \u2014 event:", seg.event.name, "| slug:", seg.event.slug, "| card found:", !!card);
-          if (card) showHoverCard(card, seg.occurrence, seg.event, pill, wrap);
+          if (!card) return;
+          if (hoverState.activeCard && hoverState.activeCard !== card) {
+            hideHoverCard(hoverState.activeCard);
+          }
+          hoverState.activeCard = card;
+          showHoverCard(card, seg.occurrence, seg.event, pill, wrap);
         });
-        pill.addEventListener("mouseleave", () => hideHoverCard(card));
+        pill.addEventListener("mouseleave", () => {
+          console.log("[calendar] DEBUG pill mouseleave \u2014 event:", seg.event.name);
+          hideHoverCard(card);
+          if (hoverState.activeCard === card) hoverState.activeCard = null;
+        });
         nextLane++;
       });
     });
@@ -1120,7 +1164,7 @@
       });
     });
   }
-  function createPill(pillTemplate, segment, pos, linkFormat, suffix) {
+  function createPill(pillTemplate, segment, pos, linkFormat, showEndTime, suffix) {
     const { event, occurrence } = segment;
     const clone = pillTemplate.cloneNode(true);
     uniquifyIds(clone, suffix);
@@ -1132,6 +1176,12 @@
       setField(clone, LOCATION_EL, event.location);
       setField(clone, ADDRESS_EL, event.address);
       setField(clone, TIMEZONE_EL, event.timezone);
+      const dateEl = clone.querySelector(DATE_EL2);
+      if (dateEl) {
+        const pillTime = formatPillTime(occurrence, event, showEndTime);
+        if (pillTime === null) dateEl.style.display = "none";
+        else dateEl.textContent = pillTime;
+      }
     }
     clone.href = linkFormat.replace("{slug}", event.slug || "");
     clone.classList.add(`is-${pos}`);
