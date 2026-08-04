@@ -845,6 +845,7 @@
   var LOADING = '[data-ix-events="loading"]';
   var DEMO_NOTE = '[data-ix-events="demo-note"]';
   var HOVER_CARD = '[data-ix-events="hover-card"]';
+  var FS_LIST_SELECTOR2 = '[fs-list-element="list"]';
   var SLUG_ATTR2 = "data-ix-events-slug";
   var DISABLED_CLASS2 = "is-disabled";
   var HIDDEN_CLASS = "u-display-none";
@@ -899,14 +900,17 @@
     const weekdayLabels = [...wrap.querySelectorAll(WEEKDAY_LABEL)];
     const loadingEl = wrap.querySelector(LOADING);
     const demoNoteEl = wrap.querySelector(DEMO_NOTE);
-    const hoverCardsBySlug = buildHoverCardMap(wrap);
-    debugLog("[calendar] hover-cards found:", hoverCardsBySlug.size, "| slugs:", [...hoverCardsBySlug.keys()]);
-    if (hoverCardsBySlug.size === 0) {
-      console.warn(
-        `calendar: no [data-ix-events="hover-card"] elements with a resolved data-ix-events-slug were found \u2014 hover cards will never show for this instance. If you haven't yet wrapped the hover-card template in a live Webflow Collection List bound to your Events collection (see the TODO comment in the mockup), that's almost certainly why \u2014 the un-wired template only carries the literal, unresolved "{{wf:Slug}}" text.`,
-        wrap
-      );
-    }
+    const hoverCardsBySlug = /* @__PURE__ */ new Map();
+    resolveHoverCards(wrap, hoverCardsBySlug, () => {
+      debugLog("[calendar] hover-cards found:", hoverCardsBySlug.size, "| slugs:", [...hoverCardsBySlug.keys()]);
+      if (hoverCardsBySlug.size === 0) {
+        console.warn(
+          `calendar: no [data-ix-events="hover-card"] elements with a resolved data-ix-events-slug were found \u2014 hover cards will never show for this instance. If you haven't yet wrapped the hover-card template in a live Webflow Collection List bound to your Events collection (see the TODO comment in the mockup), that's almost certainly why \u2014 the un-wired template only carries the literal, unresolved "{{wf:Slug}}" text.`,
+          wrap
+        );
+      }
+      refresh();
+    });
     if (!pillTemplate) {
       console.warn('calendar: no [data-ix-events="calendar-pill"] template found \u2014 no events will render.', wrap);
     }
@@ -1022,15 +1026,39 @@
     const num = parseFloat(trimmed);
     return Number.isNaN(num) ? null : num;
   }
-  function buildHoverCardMap(wrap) {
-    const map = /* @__PURE__ */ new Map();
+  function buildHoverCardMap(wrap, map) {
     wrap.querySelectorAll(HOVER_CARD).forEach((card) => {
       unwrapFromHiddenAncestor(card, wrap);
       const slugEl = card.closest(`[${SLUG_ATTR2}]`);
       const slug = slugEl?.getAttribute(SLUG_ATTR2);
       if (slug) map.set(slug, card);
     });
-    return map;
+  }
+  function resolveHoverCards(wrap, map, callback) {
+    const list = wrap.querySelector(FS_LIST_SELECTOR2);
+    if (!list) {
+      queueMicrotask(() => {
+        buildHoverCardMap(wrap, map);
+        callback();
+      });
+      return;
+    }
+    window.FinsweetAttributes ||= [];
+    window.FinsweetAttributes.push([
+      "list",
+      (listInstances) => {
+        const listInstance = listInstances.find((l) => l.listElement === list);
+        Promise.resolve(listInstance?.loadingPaginatedItems).then(() => {
+          buildHoverCardMap(wrap, map);
+          callback();
+        });
+        new MutationObserver(() => {
+          const sizeBefore = map.size;
+          buildHoverCardMap(wrap, map);
+          if (map.size !== sizeBefore) callback();
+        }).observe(list, { childList: true, subtree: true });
+      }
+    ]);
   }
   function unwrapFromHiddenAncestor(el, wrap) {
     let node = el;
@@ -1042,7 +1070,7 @@
       node = node.parentElement;
     }
   }
-  function showHoverCard(card, occurrence, event, pillEl, wrap) {
+  function showHoverCard(card, occurrence, event, pillEl, wrap, hoverState) {
     setDateFields(card, occurrence, event);
     card.classList.remove("is-active", "is-above", "is-below");
     card.style.transition = "none";
@@ -1063,7 +1091,9 @@
     card.classList.toggle("is-above", !showBelow);
     card.classList.toggle("is-below", showBelow);
     void card.offsetHeight;
-    requestAnimationFrame(() => card.classList.add("is-active"));
+    requestAnimationFrame(() => {
+      if (hoverState.activeCard === card) card.classList.add("is-active");
+    });
   }
   function hideHoverCard(card) {
     card?.classList.remove("is-active");
@@ -1177,18 +1207,19 @@
         const pos = dayIndex === seg.startIndex && dayIndex === seg.endIndex ? "single" : dayIndex === seg.startIndex ? "start" : dayIndex === seg.endIndex ? "end" : "middle";
         const pill = createPill(pillTemplate, seg, pos, linkFormat, `cal-${dayIndex}-${seg.lane}`);
         pillsEl.appendChild(pill);
-        const card = hoverCardsBySlug.get(seg.event.slug);
-        if (!card) unmatchedSlugs.add(seg.event.slug);
+        if (!hoverCardsBySlug.has(seg.event.slug)) unmatchedSlugs.add(seg.event.slug);
         pill.addEventListener("mouseenter", () => {
+          const card = hoverCardsBySlug.get(seg.event.slug);
           debugLog("[calendar] pill mouseenter \u2014 event:", seg.event.name, "| slug:", seg.event.slug, "| card found:", !!card);
           if (!card) return;
           if (hoverState.activeCard && hoverState.activeCard !== card) {
             hideHoverCard(hoverState.activeCard);
           }
           hoverState.activeCard = card;
-          showHoverCard(card, seg.occurrence, seg.event, pill, wrap);
+          showHoverCard(card, seg.occurrence, seg.event, pill, wrap, hoverState);
         });
         pill.addEventListener("mouseleave", () => {
+          const card = hoverCardsBySlug.get(seg.event.slug);
           debugLog("[calendar] pill mouseleave \u2014 event:", seg.event.name);
           hideHoverCard(card);
           if (hoverState.activeCard === card) hoverState.activeCard = null;

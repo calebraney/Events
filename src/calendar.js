@@ -31,7 +31,17 @@ import { startOfDay, addDays, anchorFor, getRangeBounds, stepCurrent, formatOccu
 //         [data-ix-events="day-more"]         optional — "+N more" overflow
 //     [data-ix-events="loading"]              optional — visible by default
 //     [data-ix-events="demo-note"]            optional — hidden by default
-//     [data-ix-events="hover-cards"]          optional — one hover-card per event
+//     [data-ix-events="hover-cards"]          optional — one hover-card per event.
+//                                               No specific wrapper role is
+//                                               required — every hover-card is
+//                                               found directly, wherever it
+//                                               lives. If it's inside a Finsweet
+//                                               fs-list-element="list" Collection
+//                                               List (e.g. fs-list-load="all" to
+//                                               go beyond ~100 events), resolution
+//                                               waits for pagination to finish
+//                                               first — same reasoning as
+//                                               event-data.js's whenEvents().
 //       [data-ix-events="hover-card"]
 //         data-ix-events-slug="{{wf:Slug}}"
 //     [data-ix-events="calendar-pill"]        hidden template, cloned once
@@ -152,6 +162,7 @@ const PILL_SPACER_TEMPLATE = '[data-ix-events="calendar-pill-spacer"]';
 const LOADING = '[data-ix-events="loading"]';
 const DEMO_NOTE = '[data-ix-events="demo-note"]';
 const HOVER_CARD = '[data-ix-events="hover-card"]';
+const FS_LIST_SELECTOR = '[fs-list-element="list"]';
 const SLUG_ATTR = 'data-ix-events-slug';
 const DISABLED_CLASS = 'is-disabled';
 const HIDDEN_CLASS = 'u-display-none';
@@ -222,14 +233,25 @@ function initCalendar(wrap) {
   const weekdayLabels = [...wrap.querySelectorAll(WEEKDAY_LABEL)];
   const loadingEl = wrap.querySelector(LOADING);
   const demoNoteEl = wrap.querySelector(DEMO_NOTE);
-  const hoverCardsBySlug = buildHoverCardMap(wrap);
-  debugLog('[calendar] hover-cards found:', hoverCardsBySlug.size, '| slugs:', [...hoverCardsBySlug.keys()]);
-  if (hoverCardsBySlug.size === 0) {
-    console.warn(
-      'calendar: no [data-ix-events="hover-card"] elements with a resolved data-ix-events-slug were found — hover cards will never show for this instance. If you haven\'t yet wrapped the hover-card template in a live Webflow Collection List bound to your Events collection (see the TODO comment in the mockup), that\'s almost certainly why — the un-wired template only carries the literal, unresolved "{{wf:Slug}}" text.',
-      wrap
-    );
-  }
+  // Populated in place (see resolveHoverCards below) rather than reassigned,
+  // so the reference closed over by renderGrid()/pill listeners below stays
+  // valid even if resolution finishes asynchronously, after they're created.
+  const hoverCardsBySlug = new Map();
+  resolveHoverCards(wrap, hoverCardsBySlug, () => {
+    debugLog('[calendar] hover-cards found:', hoverCardsBySlug.size, '| slugs:', [...hoverCardsBySlug.keys()]);
+    if (hoverCardsBySlug.size === 0) {
+      console.warn(
+        'calendar: no [data-ix-events="hover-card"] elements with a resolved data-ix-events-slug were found — hover cards will never show for this instance. If you haven\'t yet wrapped the hover-card template in a live Webflow Collection List bound to your Events collection (see the TODO comment in the mockup), that\'s almost certainly why — the un-wired template only carries the literal, unresolved "{{wf:Slug}}" text.',
+        wrap
+      );
+    }
+    // Re-render so the "unmatched slugs" diagnostic (in renderGrid) reflects
+    // final data instead of whatever was known at an earlier, possibly
+    // pre-population pass. Not required for hover itself to work — pill
+    // listeners look hoverCardsBySlug up fresh on every hover — this is
+    // purely to keep that one diagnostic warning accurate.
+    refresh();
+  });
 
   if (!pillTemplate) {
     console.warn('calendar: no [data-ix-events="calendar-pill"] template found — no events will render.', wrap);
@@ -390,15 +412,64 @@ function cssLengthToPx(value) {
 // slug can live on the card itself OR any ancestor up to the card (e.g. a
 // CMS Collection Item wrapper carrying the slug, with the visible card as
 // its child — the same shape List View's separate mode already uses).
-function buildHoverCardMap(wrap) {
-  const map = new Map();
+function buildHoverCardMap(wrap, map) {
   wrap.querySelectorAll(HOVER_CARD).forEach((card) => {
     unwrapFromHiddenAncestor(card, wrap);
     const slugEl = card.closest(`[${SLUG_ATTR}]`);
     const slug = slugEl?.getAttribute(SLUG_ATTR);
     if (slug) map.set(slug, card);
   });
-  return map;
+}
+
+// If the hover-cards live inside a Finsweet-paginated Collection List
+// (fs-list-element="list", typically paired with fs-list-load="all" to go
+// beyond Webflow's native per-page item cap — see event-data.js's identical
+// concern for the main data source), scanning synchronously at init time
+// would only ever find whichever cards happened to already be in the DOM on
+// Finsweet's first page, well before its own async pagination finishes —
+// exactly the same class of bug event-data.js's whenEvents() already guards
+// against. Waits for that first; a same-tick no-op when there's no such
+// list (the common case — hover-cards usually isn't Finsweet-driven at all).
+function resolveHoverCards(wrap, map, callback) {
+  const list = wrap.querySelector(FS_LIST_SELECTOR);
+  if (!list) {
+    // Deferred (not called inline) so this is always async regardless of
+    // which branch runs — lets the caller schedule work after this that
+    // depends on variables declared later in its own function body, without
+    // worrying about which branch executes synchronously.
+    queueMicrotask(() => {
+      buildHoverCardMap(wrap, map);
+      callback();
+    });
+    return;
+  }
+
+  window.FinsweetAttributes ||= [];
+  window.FinsweetAttributes.push([
+    'list',
+    (listInstances) => {
+      const listInstance = listInstances.find((l) => l.listElement === list);
+      Promise.resolve(listInstance?.loadingPaginatedItems).then(() => {
+        buildHoverCardMap(wrap, map);
+        callback();
+      });
+
+      // Belt-and-suspenders, confirmed necessary live: loadingPaginatedItems
+      // can resolve before Finsweet is actually done mutating this list's
+      // DOM for a multi-page fetch — cards for a couple of events were still
+      // missing from the DOM at that point, only appearing moments later.
+      // Rather than chase a second, more precise timing hook, watch the list
+      // directly and pick up anything new the instant it lands, regardless
+      // of when or why Finsweet adds it. Only re-fires callback() when a
+      // mutation actually grew the map — harmless no-op on any of the many
+      // unrelated mutations a live list can otherwise produce.
+      new MutationObserver(() => {
+        const sizeBefore = map.size;
+        buildHoverCardMap(wrap, map);
+        if (map.size !== sizeBefore) callback();
+      }).observe(list, { childList: true, subtree: true });
+    },
+  ]);
 }
 
 // A hover-card accidentally left nested inside a permanently-hidden
@@ -429,7 +500,7 @@ function unwrapFromHiddenAncestor(el, wrap) {
 // time it ever moves in the DOM is once, at init, if
 // unwrapFromHiddenAncestor() has to rescue it from a hidden holder). Only
 // its inline left/top and its classes change.
-function showHoverCard(card, occurrence, event, pillEl, wrap) {
+function showHoverCard(card, occurrence, event, pillEl, wrap, hoverState) {
   setDateFields(card, occurrence, event);
 
   // is-above/is-below (and whatever transform they carry — translate,
@@ -512,7 +583,17 @@ function showHoverCard(card, occurrence, event, pillEl, wrap) {
   card.classList.toggle('is-above', !showBelow);
   card.classList.toggle('is-below', showBelow);
   void card.offsetHeight; // force layout so the above state is committed/painted
-  requestAnimationFrame(() => card.classList.add('is-active'));
+  // Guard against a stale reveal: moving the mouse quickly across several
+  // pills queues one of these rAF callbacks per hover, but a card's own
+  // mouseenter/mouseleave already run synchronously and can flip
+  // hoverState.activeCard on to someone else *before* this frame paints.
+  // Without this check, an earlier card's queued callback would still fire
+  // and force is-active back on after its own mouseleave already hid it —
+  // this was the actual cause of cards getting stuck visible during fast
+  // mouse movement, not a timing/duration issue a delay would have fixed.
+  requestAnimationFrame(() => {
+    if (hoverState.activeCard === card) card.classList.add('is-active');
+  });
 }
 
 function hideHoverCard(card) {
@@ -672,12 +753,14 @@ function renderGrid({
               : 'middle';
       const pill = createPill(pillTemplate, seg, pos, linkFormat, `cal-${dayIndex}-${seg.lane}`);
       pillsEl.appendChild(pill);
-      // Always attach, even if no card currently matches, so a mouseenter
-      // always logs something — otherwise a slug-matching problem looks
-      // identical to "nothing happening at all" from the console.
-      const card = hoverCardsBySlug.get(seg.event.slug);
-      if (!card) unmatchedSlugs.add(seg.event.slug);
+      // Diagnostic snapshot only, taken once at render time — the listeners
+      // below look the card up fresh on every hover instead of closing over
+      // this value, since hoverCardsBySlug can still be populating
+      // asynchronously (see resolveHoverCards) when this pill is created; a
+      // value baked in here could go stale the moment that population lands.
+      if (!hoverCardsBySlug.has(seg.event.slug)) unmatchedSlugs.add(seg.event.slug);
       pill.addEventListener('mouseenter', () => {
+        const card = hoverCardsBySlug.get(seg.event.slug);
         debugLog('[calendar] pill mouseenter — event:', seg.event.name, '| slug:', seg.event.slug, '| card found:', !!card);
         if (!card) return;
         // Force-hide whatever was previously shown first — a defensive
@@ -689,9 +772,10 @@ function renderGrid({
           hideHoverCard(hoverState.activeCard);
         }
         hoverState.activeCard = card;
-        showHoverCard(card, seg.occurrence, seg.event, pill, wrap);
+        showHoverCard(card, seg.occurrence, seg.event, pill, wrap, hoverState);
       });
       pill.addEventListener('mouseleave', () => {
+        const card = hoverCardsBySlug.get(seg.event.slug);
         debugLog('[calendar] pill mouseleave — event:', seg.event.name);
         hideHoverCard(card);
         if (hoverState.activeCard === card) hoverState.activeCard = null;
