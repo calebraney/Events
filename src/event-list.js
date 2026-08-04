@@ -6,7 +6,8 @@ import {
   anchorFor,
   getRangeBounds,
   stepCurrent,
-  stepPeriodEnd,
+  expandingWindowSearch,
+  SEARCH_CAP,
   formatOccurrenceDate,
   formatWeekLabel,
   setDateFields,
@@ -210,7 +211,26 @@ import {
 //   data-ix-events-feed-divider-today="true" | "false" (default)
 //     only meaningful when feed-divider is true. Overrides the text of that
 //     very first divider to the literal word "Today" instead of the current
-//     month's formatted label. No effect if feed-divider is false.
+//     month's formatted label. No effect if feed-divider is false, and no
+//     effect when direction="past" (see below) — a past feed's first divider
+//     is essentially never literally today, so forcing "Today" text there
+//     would just be wrong.
+//   data-ix-events-direction="upcoming" (default) | "past"
+//     upcoming — occurrences on/after today, soonest first (unchanged
+//     default behavior).
+//     past — occurrences that have already ended, most recent first. With
+//     duplicate-recurring="false" this caps each event to its single most
+//     recent past occurrence (the mirror of upcoming's "single next
+//     occurrence").
+//
+// A small, fixed-count showcase section anywhere on the site (e.g. "next 3
+// workshops" in a page footer) is just a Feed View instance with no
+// load-more/load-more-wrap element and feed-divider="false" — item-count
+// renders exactly that many cards once, nothing else. Scope which events
+// appear via Webflow's own Designer-side Collection List filter (event
+// type, location, etc.) — this module only ever iterates whatever items are
+// already in the list, so no extra filtering code is involved. Use
+// direction="past" for a "just happened" section instead.
 // ============================================================================
 
 const ANIMATION_ID = 'events';
@@ -233,7 +253,6 @@ const LOAD_MORE_WRAP = '[data-ix-events="load-more-wrap"]';
 const LOAD_MORE_BTN = '[data-ix-events="load-more"]';
 const FEED_DIVIDER_EL = '[data-ix-events="feed-divider"]';
 const FEED_DIVIDER_TEXT_EL = '[data-ix-events="feed-divider-text"]';
-const FEED_SEARCH_CAP = 36; // safety cap on how many extra period-steps Load More will search before giving up
 
 // ── List View ────────────────────────────────────────────────────────────
 
@@ -505,6 +524,8 @@ function initFeed(wrap, eventsBySlug) {
   if (feedPeriod !== 'month' && feedPeriod !== 'week') feedPeriod = 'month';
   const feedDivider = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-divider`));
   const feedDividerToday = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-divider-today`));
+  let direction = attr('upcoming', wrap.getAttribute(`data-ix-${ANIMATION_ID}-direction`)?.toLowerCase());
+  if (direction !== 'upcoming' && direction !== 'past') direction = 'upcoming';
 
   // Templates only — every visible feed card is a clone, since occurrences
   // from different events interleave chronologically across the whole feed,
@@ -518,7 +539,7 @@ function initFeed(wrap, eventsBySlug) {
   const loadMoreTarget = loadMoreWrap || loadMoreBtn;
   const dividerTemplate = wrap.querySelector(FEED_DIVIDER_EL);
   const dividerTextEl = dividerTemplate?.querySelector(FEED_DIVIDER_TEXT_EL);
-  debugLog('[event-feed] initFeed: duplicateRecurring =', duplicateRecurring, '| itemCount =', itemCount, '| feedPeriod =', feedPeriod, '| feedDivider =', feedDivider, '| feedDividerToday =', feedDividerToday, '| loadMoreBtn found:', !!loadMoreBtn, '| dividerTemplate found:', !!dividerTemplate);
+  debugLog('[event-feed] initFeed: duplicateRecurring =', duplicateRecurring, '| itemCount =', itemCount, '| feedPeriod =', feedPeriod, '| feedDivider =', feedDivider, '| feedDividerToday =', feedDividerToday, '| direction =', direction, '| loadMoreBtn found:', !!loadMoreBtn, '| dividerTemplate found:', !!dividerTemplate);
   if (feedDivider && !dividerTemplate) {
     console.warn('event-feed: feed-divider is enabled but no [data-ix-events="feed-divider"] element was found.', wrap);
   }
@@ -545,20 +566,20 @@ function initFeed(wrap, eventsBySlug) {
 
   function loadMore() {
     const now = new Date();
-    const rangeStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const targetCount = renderedCount + itemCount;
 
-    let searchEnd = stepPeriodEnd(rangeStart, feedPeriod);
-    let merged = mergeOccurrences(entries, rangeStart, searchEnd, duplicateRecurring);
-    let iterations = 0;
-    while (merged.length < targetCount && iterations < FEED_SEARCH_CAP) {
-      searchEnd = stepPeriodEnd(searchEnd, feedPeriod);
-      merged = mergeOccurrences(entries, rangeStart, searchEnd, duplicateRecurring);
-      iterations++;
-    }
+    const merged = expandingWindowSearch({
+      anchor: today,
+      period: feedPeriod,
+      direction,
+      targetCount,
+      maxIterations: SEARCH_CAP,
+      search: (start, end) => mergeOccurrences(entries, start, end, duplicateRecurring, direction),
+    });
 
     const batch = merged.slice(renderedCount, targetCount);
-    debugLog('[event-feed] loadMore: targetCount =', targetCount, '| total merged occurrences found:', merged.length, '(after', iterations, 'extra search steps) | batch size:', batch.length);
+    debugLog('[event-feed] loadMore: targetCount =', targetCount, '| total merged occurrences found:', merged.length, '| batch size:', batch.length);
     if (batch.length === 0) {
       if (loadMoreTarget) loadMoreTarget.style.display = 'none';
       return;
@@ -570,7 +591,8 @@ function initFeed(wrap, eventsBySlug) {
         if (currentDividerMonthKey === null || monthKey !== currentDividerMonthKey) {
           const isFirstDividerEver = currentDividerMonthKey === null;
           const format = attr('MMMM, YYYY', dividerTextEl?.getAttribute('data-ix-events-date-format'));
-          const text = isFirstDividerEver && feedDividerToday ? 'Today' : formatOccurrenceDate(occurrence.start, format);
+          const showTodayLabel = isFirstDividerEver && feedDividerToday && direction !== 'past';
+          const text = showTodayLabel ? 'Today' : formatOccurrenceDate(occurrence.start, format);
           container.appendChild(createDivider(text));
           currentDividerMonthKey = monthKey;
         }
@@ -588,19 +610,27 @@ function initFeed(wrap, eventsBySlug) {
 
 // Flattens every event's occurrences within [rangeStart, rangeEnd] into one
 // chronologically sorted list, applying duplicate-recurring the same way
-// List View does (false = cap each event to its first occurrence).
-function mergeOccurrences(entries, rangeStart, rangeEnd, duplicateRecurring) {
+// List View does (false = cap each event to a single occurrence).
+// direction="upcoming" (default): soonest first, capped to each event's
+// first occurrence in range.
+// direction="past": occurrences that have already ended (occ.end < now),
+// most-recent-first, capped to each event's LAST occurrence in range — the
+// mirror of upcoming's "single next occurrence."
+export function mergeOccurrences(entries, rangeStart, rangeEnd, duplicateRecurring, direction = 'upcoming') {
+  const isPast = direction === 'past';
+  const now = new Date();
   const merged = [];
   entries.forEach(({ item, event }) => {
     let occurrences = getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
-    if (!duplicateRecurring) occurrences = occurrences.slice(0, 1);
+    if (isPast) occurrences = occurrences.filter((occ) => occ.end < now);
+    if (!duplicateRecurring) occurrences = isPast ? occurrences.slice(-1) : occurrences.slice(0, 1);
     occurrences.forEach((occurrence) => merged.push({ item, event, occurrence }));
   });
   merged.sort((a, b) => {
     const dayDiff = startOfDay(a.occurrence.start) - startOfDay(b.occurrence.start);
-    if (dayDiff !== 0) return dayDiff;
+    if (dayDiff !== 0) return isPast ? -dayDiff : dayDiff;
     if (a.event.showStartTime !== b.event.showStartTime) return a.event.showStartTime ? -1 : 1;
-    return a.occurrence.start - b.occurrence.start;
+    return isPast ? b.occurrence.start - a.occurrence.start : a.occurrence.start - b.occurrence.start;
   });
   return merged;
 }
@@ -645,7 +675,7 @@ function buildEntries(wrap, eventsBySlug) {
 // default is null, meaning "no limit, show everything" — the pre-existing
 // behavior; Feed View's default is 12, unchanged from before this option
 // was shared and renamed from data-ix-events-feed-count).
-function readItemCount(wrap, defaultValue) {
+export function readItemCount(wrap, defaultValue) {
   const raw = wrap.getAttribute(`data-ix-${ANIMATION_ID}-item-count`);
   if (raw === null || raw.trim() === '') return defaultValue;
   const n = Number(raw);
@@ -658,7 +688,7 @@ function readItemCount(wrap, defaultValue) {
 // falls back to a bare [data-ix-events="load-more"] button found anywhere in
 // wrap (and the button itself is what gets shown/hidden) — keeps Feed View's
 // original, already-shipped flat markup (no wrap) working unchanged.
-function resolveLoadMore(wrap) {
+export function resolveLoadMore(wrap) {
   const loadMoreWrap = wrap.querySelector(LOAD_MORE_WRAP);
   const loadMoreBtn = (loadMoreWrap || wrap).querySelector(LOAD_MORE_BTN);
   return { loadMoreWrap, loadMoreBtn };
@@ -706,7 +736,7 @@ function whenListReady(wrap, required, callback) {
 // Builds one occurrence's card from a template item — used for List View's
 // clones and every card Feed View renders. Insertion into the DOM is left to
 // the caller, since the two views position cards differently.
-function createOccurrenceCard(templateItem, occurrence, event, suffix) {
+export function createOccurrenceCard(templateItem, occurrence, event, suffix) {
   const clone = templateItem.cloneNode(true);
   // cloneNode() copies the template's CURRENT inline style too — harmless for
   // List View (its original is already reset to visible before cloning each

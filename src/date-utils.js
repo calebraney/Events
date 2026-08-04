@@ -70,6 +70,42 @@ export function stepPeriodEnd(date, period) {
   return next;
 }
 
+// Backward mirror of stepPeriodEnd — same 1st-of-month pinning, opposite
+// direction. Used by direction="past" searches (Feed View, event-detail).
+export function stepPeriodStart(date, period) {
+  if (period === 'week') return addDays(date, -7);
+  const next = new Date(date.getFullYear(), date.getMonth(), 1);
+  next.setMonth(next.getMonth() - 1);
+  return next;
+}
+
+// Safety cap on how many extra period-steps an expanding search will try
+// before giving up — shared by every expandingWindowSearch() caller.
+export const SEARCH_CAP = 36;
+
+// Grows a bounded [windowStart, windowEnd] window one `period` step at a
+// time — forward from `anchor` when direction="upcoming", backward when
+// direction="past" — re-invoking `search(windowStart, windowEnd)` after each
+// step until it returns >= targetCount results or maxIterations extra steps
+// have been tried, whichever comes first. `search` must be pure (no DOM) and
+// return an array; this function doesn't assume anything about its shape —
+// it works the same whether the caller is merging occurrences across many
+// events (Feed View) or querying a single event (event-detail).
+export function expandingWindowSearch({ anchor, period, direction, targetCount, maxIterations, search }) {
+  const isPast = direction === 'past';
+  let windowStart = isPast ? stepPeriodStart(anchor, period) : anchor;
+  let windowEnd = isPast ? anchor : stepPeriodEnd(anchor, period);
+  let results = search(windowStart, windowEnd);
+  let iterations = 0;
+  while (results.length < targetCount && iterations < maxIterations) {
+    if (isPast) windowStart = stepPeriodStart(windowStart, period);
+    else windowEnd = stepPeriodEnd(windowEnd, period);
+    results = search(windowStart, windowEnd);
+    iterations++;
+  }
+  return results;
+}
+
 // ── Formatting ───────────────────────────────────────────────────────────
 
 const pad2 = (n) => String(n).padStart(2, '0');

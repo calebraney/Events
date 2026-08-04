@@ -344,6 +344,27 @@
     next.setMonth(next.getMonth() + 1);
     return next;
   }
+  function stepPeriodStart(date, period) {
+    if (period === "week") return addDays2(date, -7);
+    const next = new Date(date.getFullYear(), date.getMonth(), 1);
+    next.setMonth(next.getMonth() - 1);
+    return next;
+  }
+  var SEARCH_CAP = 36;
+  function expandingWindowSearch({ anchor, period, direction, targetCount, maxIterations, search }) {
+    const isPast = direction === "past";
+    let windowStart = isPast ? stepPeriodStart(anchor, period) : anchor;
+    let windowEnd = isPast ? anchor : stepPeriodEnd(anchor, period);
+    let results = search(windowStart, windowEnd);
+    let iterations = 0;
+    while (results.length < targetCount && iterations < maxIterations) {
+      if (isPast) windowStart = stepPeriodStart(windowStart, period);
+      else windowEnd = stepPeriodEnd(windowEnd, period);
+      results = search(windowStart, windowEnd);
+      iterations++;
+    }
+    return results;
+  }
   var pad2 = (n) => String(n).padStart(2, "0");
   var ordinal = (n) => {
     if (n % 10 === 1 && n % 100 !== 11) return `${n}st`;
@@ -466,7 +487,6 @@
   var LOAD_MORE_BTN = '[data-ix-events="load-more"]';
   var FEED_DIVIDER_EL = '[data-ix-events="feed-divider"]';
   var FEED_DIVIDER_TEXT_EL = '[data-ix-events="feed-divider-text"]';
-  var FEED_SEARCH_CAP = 36;
   var eventList = function() {
     const wraps = [...document.querySelectorAll(WRAP2)].filter(
       (wrap) => wrap.getAttribute("data-ix-events-layout") === LIST_LAYOUT
@@ -668,6 +688,8 @@
     if (feedPeriod !== "month" && feedPeriod !== "week") feedPeriod = "month";
     const feedDivider = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-divider`));
     const feedDividerToday = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-divider-today`));
+    let direction = attr("upcoming", wrap.getAttribute(`data-ix-${ANIMATION_ID}-direction`)?.toLowerCase());
+    if (direction !== "upcoming" && direction !== "past") direction = "upcoming";
     const container = entries[0].item.parentElement;
     entries.forEach(({ item }) => {
       item.style.display = "none";
@@ -676,7 +698,7 @@
     const loadMoreTarget = loadMoreWrap || loadMoreBtn;
     const dividerTemplate = wrap.querySelector(FEED_DIVIDER_EL);
     const dividerTextEl = dividerTemplate?.querySelector(FEED_DIVIDER_TEXT_EL);
-    debugLog("[event-feed] initFeed: duplicateRecurring =", duplicateRecurring, "| itemCount =", itemCount, "| feedPeriod =", feedPeriod, "| feedDivider =", feedDivider, "| feedDividerToday =", feedDividerToday, "| loadMoreBtn found:", !!loadMoreBtn, "| dividerTemplate found:", !!dividerTemplate);
+    debugLog("[event-feed] initFeed: duplicateRecurring =", duplicateRecurring, "| itemCount =", itemCount, "| feedPeriod =", feedPeriod, "| feedDivider =", feedDivider, "| feedDividerToday =", feedDividerToday, "| direction =", direction, "| loadMoreBtn found:", !!loadMoreBtn, "| dividerTemplate found:", !!dividerTemplate);
     if (feedDivider && !dividerTemplate) {
       console.warn('event-feed: feed-divider is enabled but no [data-ix-events="feed-divider"] element was found.', wrap);
     }
@@ -692,18 +714,18 @@
     }
     function loadMore() {
       const now = /* @__PURE__ */ new Date();
-      const rangeStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const targetCount = renderedCount + itemCount;
-      let searchEnd = stepPeriodEnd(rangeStart, feedPeriod);
-      let merged = mergeOccurrences(entries, rangeStart, searchEnd, duplicateRecurring);
-      let iterations = 0;
-      while (merged.length < targetCount && iterations < FEED_SEARCH_CAP) {
-        searchEnd = stepPeriodEnd(searchEnd, feedPeriod);
-        merged = mergeOccurrences(entries, rangeStart, searchEnd, duplicateRecurring);
-        iterations++;
-      }
+      const merged = expandingWindowSearch({
+        anchor: today,
+        period: feedPeriod,
+        direction,
+        targetCount,
+        maxIterations: SEARCH_CAP,
+        search: (start, end) => mergeOccurrences(entries, start, end, duplicateRecurring, direction)
+      });
       const batch = merged.slice(renderedCount, targetCount);
-      debugLog("[event-feed] loadMore: targetCount =", targetCount, "| total merged occurrences found:", merged.length, "(after", iterations, "extra search steps) | batch size:", batch.length);
+      debugLog("[event-feed] loadMore: targetCount =", targetCount, "| total merged occurrences found:", merged.length, "| batch size:", batch.length);
       if (batch.length === 0) {
         if (loadMoreTarget) loadMoreTarget.style.display = "none";
         return;
@@ -714,7 +736,8 @@
           if (currentDividerMonthKey === null || monthKey !== currentDividerMonthKey) {
             const isFirstDividerEver = currentDividerMonthKey === null;
             const format = attr("MMMM, YYYY", dividerTextEl?.getAttribute("data-ix-events-date-format"));
-            const text = isFirstDividerEver && feedDividerToday ? "Today" : formatOccurrenceDate(occurrence.start, format);
+            const showTodayLabel = isFirstDividerEver && feedDividerToday && direction !== "past";
+            const text = showTodayLabel ? "Today" : formatOccurrenceDate(occurrence.start, format);
             container.appendChild(createDivider(text));
             currentDividerMonthKey = monthKey;
           }
@@ -727,18 +750,21 @@
     loadMore();
     loadMoreBtn?.addEventListener("click", loadMore);
   }
-  function mergeOccurrences(entries, rangeStart, rangeEnd, duplicateRecurring) {
+  function mergeOccurrences(entries, rangeStart, rangeEnd, duplicateRecurring, direction = "upcoming") {
+    const isPast = direction === "past";
+    const now = /* @__PURE__ */ new Date();
     const merged = [];
     entries.forEach(({ item, event }) => {
       let occurrences = getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
-      if (!duplicateRecurring) occurrences = occurrences.slice(0, 1);
+      if (isPast) occurrences = occurrences.filter((occ) => occ.end < now);
+      if (!duplicateRecurring) occurrences = isPast ? occurrences.slice(-1) : occurrences.slice(0, 1);
       occurrences.forEach((occurrence) => merged.push({ item, event, occurrence }));
     });
     merged.sort((a, b) => {
       const dayDiff = startOfDay2(a.occurrence.start) - startOfDay2(b.occurrence.start);
-      if (dayDiff !== 0) return dayDiff;
+      if (dayDiff !== 0) return isPast ? -dayDiff : dayDiff;
       if (a.event.showStartTime !== b.event.showStartTime) return a.event.showStartTime ? -1 : 1;
-      return a.occurrence.start - b.occurrence.start;
+      return isPast ? b.occurrence.start - a.occurrence.start : a.occurrence.start - b.occurrence.start;
     });
     return merged;
   }
@@ -826,10 +852,136 @@
     observer.observe(el, { attributes: true, attributeFilter: ["style"] });
   }
 
-  // src/calendar.js
+  // src/event-detail.js
   var ANIMATION_ID2 = "events";
-  var LAYOUT = "calendar";
+  var DETAIL_LAYOUT = "detail";
   var WRAP3 = '[data-ix-events="wrap"]';
+  var DATA_EL3 = '[data-ix-events="data"]';
+  var NEXT_OCCURRENCE_EL = '[data-ix-events="next-occurrence"]';
+  var OCCURRENCE_ITEM = '[data-ix-events="occurrence-item"]';
+  var ALL_RANGE_YEARS = 3;
+  var eventDetail = function() {
+    const wraps = [...document.querySelectorAll(WRAP3)].filter(
+      (wrap) => wrap.getAttribute("data-ix-events-layout") === DETAIL_LAYOUT
+    );
+    debugLog('[event-detail] wraps with layout="detail" found:', wraps.length, wraps);
+    if (wraps.length === 0) return;
+    wraps.forEach((wrap) => {
+      const event = parseWrapEvent(wrap);
+      if (!event) return;
+      renderNextOccurrence(wrap, event);
+      initOccurrenceList(wrap, event);
+    });
+  };
+  function parseWrapEvent(wrap) {
+    const dataEl = wrap.querySelector(DATA_EL3);
+    if (!dataEl) {
+      console.warn('event-detail: no [data-ix-events="data"] found in this wrap.', wrap);
+      return null;
+    }
+    try {
+      const event = parseEventFromJSON(JSON.parse(dataEl.textContent));
+      if (!event.startDate) {
+        console.warn("event-detail: event JSON has no valid Start Date.", wrap);
+        return null;
+      }
+      return event;
+    } catch (e) {
+      console.warn("event-detail: could not parse event JSON", wrap, e);
+      return null;
+    }
+  }
+  function findNextOccurrence(event) {
+    if (!event.recurringFrequency || event.recurringFrequency === "None") {
+      return { start: event.startDate, end: event.endDate || event.startDate };
+    }
+    const now = /* @__PURE__ */ new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const results = expandingWindowSearch({
+      anchor: today,
+      period: "month",
+      direction: "upcoming",
+      targetCount: 1,
+      maxIterations: SEARCH_CAP,
+      search: (start, end) => getOccurrences(event, start, end).filter((occ) => occ.end >= now).sort((a, b) => a.start - b.start)
+    });
+    return results[0] || null;
+  }
+  function renderNextOccurrence(wrap, event) {
+    const el = wrap.querySelector(NEXT_OCCURRENCE_EL);
+    if (!el) return;
+    const occurrence = findNextOccurrence(event);
+    debugLog("[event-detail] next occurrence for", event.name, ":", occurrence);
+    if (!occurrence) {
+      el.style.display = "none";
+      return;
+    }
+    el.style.display = "";
+    setDateFields(el, occurrence, event);
+  }
+  function buildAllOccurrences(event) {
+    const now = /* @__PURE__ */ new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const earliestAllowed = new Date(today.getFullYear() - ALL_RANGE_YEARS, today.getMonth(), today.getDate());
+    const rangeStart = event.startDate > earliestAllowed ? event.startDate : earliestAllowed;
+    const cappedEnd = new Date(today.getFullYear() + ALL_RANGE_YEARS, today.getMonth(), today.getDate());
+    const rangeEnd = event.recurringEndDate && event.recurringEndDate < cappedEnd ? event.recurringEndDate : cappedEnd;
+    return getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
+  }
+  function initOccurrenceList(wrap, event) {
+    const template = wrap.querySelector(OCCURRENCE_ITEM);
+    if (!template) return;
+    let filter = attr("upcoming", wrap.getAttribute(`data-ix-${ANIMATION_ID2}-detail-filter`)?.toLowerCase());
+    if (filter !== "upcoming" && filter !== "past" && filter !== "all") filter = "upcoming";
+    const itemCount = readItemCount(wrap, 12);
+    const container = template.parentElement;
+    template.style.display = "none";
+    const { loadMoreWrap, loadMoreBtn } = resolveLoadMore(wrap);
+    const loadMoreTarget = loadMoreWrap || loadMoreBtn;
+    debugLog("[event-detail] initOccurrenceList: filter =", filter, "| itemCount =", itemCount, "| loadMoreBtn found:", !!loadMoreBtn);
+    const allOccurrences = filter === "all" ? buildAllOccurrences(event) : null;
+    let renderedCount = 0;
+    function searchDirected(targetCount) {
+      const now = /* @__PURE__ */ new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      return expandingWindowSearch({
+        anchor: today,
+        period: "month",
+        direction: filter,
+        targetCount,
+        maxIterations: SEARCH_CAP,
+        search: (start, end) => {
+          const occurrences = getOccurrences(event, start, end).filter(
+            (occ) => filter === "past" ? occ.end < now : occ.end >= now
+          );
+          occurrences.sort((a, b) => filter === "past" ? b.start - a.start : a.start - b.start);
+          return occurrences;
+        }
+      });
+    }
+    function loadMore() {
+      const targetCount = renderedCount + itemCount;
+      const source = filter === "all" ? allOccurrences : searchDirected(targetCount);
+      const batch = source.slice(renderedCount, targetCount);
+      debugLog("[event-detail] loadMore: targetCount =", targetCount, "| total found:", source.length, "| batch size:", batch.length);
+      if (batch.length === 0) {
+        if (loadMoreTarget) loadMoreTarget.style.display = "none";
+        return;
+      }
+      batch.forEach((occurrence, i) => {
+        container.appendChild(createOccurrenceCard(template, occurrence, event, `detail-${renderedCount + i}`));
+      });
+      renderedCount += batch.length;
+      if (batch.length < itemCount && loadMoreTarget) loadMoreTarget.style.display = "none";
+    }
+    loadMore();
+    loadMoreBtn?.addEventListener("click", loadMore);
+  }
+
+  // src/calendar.js
+  var ANIMATION_ID3 = "events";
+  var LAYOUT = "calendar";
+  var WRAP4 = '[data-ix-events="wrap"]';
   var PREV_BTN2 = '[data-ix-events="prev"]';
   var NEXT_BTN2 = '[data-ix-events="next"]';
   var TODAY_BTN2 = '[data-ix-events="today"]';
@@ -867,7 +1019,7 @@
   };
   var DOW_SHORT2 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   var calendar = function() {
-    const wraps = [...document.querySelectorAll(WRAP3)].filter(
+    const wraps = [...document.querySelectorAll(WRAP4)].filter(
       (wrap) => wrap.getAttribute("data-ix-events-layout") === LAYOUT
     );
     debugLog('[calendar] wraps with layout="calendar" found:', wraps.length, wraps);
@@ -883,16 +1035,16 @@
       console.warn('calendar: no [data-ix-events="grid"] with [data-ix-events="day-cell"] children found.', wrap);
       return;
     }
-    const months = attr(6, wrap.getAttribute(`data-ix-${ANIMATION_ID2}-months`));
-    let range = attr("month", wrap.getAttribute(`data-ix-${ANIMATION_ID2}-range`)?.toLowerCase());
+    const months = attr(6, wrap.getAttribute(`data-ix-${ANIMATION_ID3}-months`));
+    let range = attr("month", wrap.getAttribute(`data-ix-${ANIMATION_ID3}-range`)?.toLowerCase());
     if (range !== "month" && range !== "week") range = "month";
-    const weekStartDay = attr("sunday", wrap.getAttribute(`data-ix-${ANIMATION_ID2}-week-start`)?.toLowerCase()) === "monday" ? 1 : 0;
-    const dayPillLimit = attr(3, wrap.getAttribute(`data-ix-${ANIMATION_ID2}-day-pill-limit`));
-    const linkFormat = attr("/event/{slug}", wrap.getAttribute(`data-ix-${ANIMATION_ID2}-link-format`));
-    let overflowMode = attr("expand", wrap.getAttribute(`data-ix-${ANIMATION_ID2}-overflow-items`)?.toLowerCase());
+    const weekStartDay = attr("sunday", wrap.getAttribute(`data-ix-${ANIMATION_ID3}-week-start`)?.toLowerCase()) === "monday" ? 1 : 0;
+    const dayPillLimit = attr(3, wrap.getAttribute(`data-ix-${ANIMATION_ID3}-day-pill-limit`));
+    const linkFormat = attr("/event/{slug}", wrap.getAttribute(`data-ix-${ANIMATION_ID3}-link-format`));
+    let overflowMode = attr("expand", wrap.getAttribute(`data-ix-${ANIMATION_ID3}-overflow-items`)?.toLowerCase());
     if (!["hide", "expand", "show"].includes(overflowMode)) overflowMode = "hide";
-    const showOutsideMonthEvents = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID2}-show-outside-month`));
-    const hideInactiveRow = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID2}-hide-inactive-row`));
+    const showOutsideMonthEvents = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID3}-show-outside-month`));
+    const hideInactiveRow = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID3}-hide-inactive-row`));
     const label = wrap.querySelector(LABEL2);
     const prevBtn = wrap.querySelector(PREV_BTN2);
     const nextBtn = wrap.querySelector(NEXT_BTN2);
@@ -1407,6 +1559,7 @@
   document.addEventListener("DOMContentLoaded", function() {
     eventList();
     eventFeed();
+    eventDetail();
     calendar();
   });
 })();

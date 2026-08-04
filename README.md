@@ -257,7 +257,8 @@ None beyond the shared data source (§1) and Combined/Separate card setup (same 
 | `data-ix-events-item-count`          | number             | `12`    | How many occurrence-cards to reveal on init and per `Load More` click. Shares its name and meaning with List View's option of the same name — unlike List View, Feed always has a limit (its range is unbounded going forward, so "show everything" isn't an option). **Renamed from `data-ix-events-feed-count`** — existing instances need updating. |
 | `data-ix-events-feed-period`         | `month` \| `week`  | `month` | The granularity `Load More`'s internal search expands by when looking for enough occurrences to fill a batch. Doesn't change what's shown — only how the search is chunked internally.                        |
 | `data-ix-events-feed-divider`        | `true` \| `false`  | `true`  | Enables inserting month-divider elements, including the very first one (marking the current month, before the first card). Requires a `[data-ix-events="feed-divider"]` element in the wrap.                  |
-| `data-ix-events-feed-divider-today`  | `true` \| `false`  | `false` | Only meaningful when `feed-divider` is `true`. Overrides the text of that very first divider to the literal word "Today" instead of the current month's formatted label. No effect if `feed-divider` is `false`. |
+| `data-ix-events-feed-divider-today`  | `true` \| `false`  | `false` | Only meaningful when `feed-divider` is `true`. Overrides the text of that very first divider to the literal word "Today" instead of the current month's formatted label. No effect if `feed-divider` is `false`, and no effect when `direction="past"` (a past feed's first divider is essentially never literally today). |
+| `data-ix-events-direction`           | `upcoming` \| `past` | `upcoming` | `upcoming` — occurrences on/after today, soonest first (unchanged default). `past` — occurrences that have already ended, most recent first. With `duplicate-recurring="false"`, `past` caps each event to its single most recent past occurrence (the mirror of `upcoming`'s "single next occurrence"). |
 
 ### Divider text format
 
@@ -265,7 +266,11 @@ None beyond the shared data source (§1) and Combined/Separate card setup (same 
 
 ### Load More behavior
 
-Each click reveals the next `item-count` occurrences, searched chronologically forward from today across every event (recurring events contribute one card per upcoming occurrence, same as List View with `duplicate-recurring="true"`). The button (or its `load-more-wrap`, if present) hides itself once there are no more upcoming occurrences to reveal — including on a feed with genuinely nothing left, or after searching up to 3 years forward (month period) / ~8 months forward (week period) without finding a full batch, whichever search granularity is configured.
+Each click reveals the next `item-count` occurrences, searched chronologically from today across every event (recurring events contribute one card per occurrence in range, same as List View with `duplicate-recurring="true"`). Direction depends on `data-ix-events-direction`: `upcoming` searches forward, `past` searches backward. The button (or its `load-more-wrap`, if present) hides itself once there's nothing left to reveal in that direction — including after searching up to 3 years (month period) / ~8 months (week period) without finding a full batch, whichever search granularity is configured.
+
+### Showcase sections
+
+To drop a small, fixed-count events section anywhere on the site (not just a dedicated events page) — e.g. "next 3 workshops" in a page footer, or a "recently wrapped" strip — build a Feed View instance with **no** `load-more`/`load-more-wrap` element and `data-ix-events-feed-divider="false"`. With no button to click, `Load More` still runs once on init and simply renders exactly `item-count` cards with no pagination UI and no dividers. Scope which events appear via Webflow's own Designer-side Collection List filter (event type, location, etc.) rather than any live/visitor-facing filter — this module only ever iterates whatever items are already in the list, so no extra filtering code or markup is involved. Add `data-ix-events-direction="past"` for a "just happened" section instead of "coming up."
 
 ---
 
@@ -410,7 +415,42 @@ Override any of these per-instance by setting the same custom property directly 
 
 ---
 
+## 5. Event Detail (`event-detail.js`)
+
+`data-ix-events-layout="detail"` — for the Events collection's own CMS item ("template") page: exactly one event, rendered directly by Webflow, no Collection List involved. Shows (a) that event's *next upcoming occurrence* date (not its raw Start Date, which for a recurring event may be long past) and (b) a filterable, paginated list of every occurrence date.
+
+Bypasses the shared `whenEvents()` data lookup used by List View/Feed/Calendar — that lookup's retry loop and Finsweet-pagination-await exist for late-rendering Collection List items, neither of which applies to a single server-rendered JSON blob. This module parses its own `[data-ix-events="data"]` synchronously instead.
+
+### Requirements
+
+Just the hidden JSON embed (§1's field list), placed directly on the template page — no Collection List, no Finsweet.
+
+### Element attributes
+
+| Attribute                                            | Applied to                              | Required | Purpose                                                                                                                                                                                    |
+| ----------------------------------------------------- | ---------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data-ix-events="wrap"` + `data-ix-events-layout="detail"` | Component root                     | Yes      | Marks this element as an Event Detail instance. Every option below is read from this element.                                                                                             |
+| `data-ix-events="data"`                                | `<script type="application/json">` inside wrap | Yes | This page's own event fields — same shape as every other view's hidden JSON embed (§1), bound directly to the current CMS item via `{{wf:Field}}` (no Collection List wrapper needed).   |
+| `data-ix-events="next-occurrence"`                     | Any element inside wrap                  | No       | Scope for the next occurrence's date. Hidden entirely if there's genuinely no next occurrence (a recurring series whose `Recurring End Date` has already passed).                        |
+| `data-ix-events="occurrence-item"`                     | Template row, anywhere inside wrap       | No       | One occurrence's row. Hidden after init; clones are appended into its own parent element as more are revealed.                                                                            |
+| `data-ix-events="date"`                                | Any text element inside `next-occurrence` or `occurrence-item` | No | Same `data-ix-events-date-format` contract as every other view, including `FULLDATE` — see [Format attributes](#format-attributes).                                                        |
+| `data-ix-events="load-more-wrap"` / `"load-more"`      | Same pattern as List/Feed View            | No       | Reveals the next batch of occurrence rows.                                                                                                                                                 |
+
+### Option attributes (all on the `wrap` element)
+
+| Attribute                        | Values                          | Default    | Purpose                                                                                                                                                                                                    |
+| ---------------------------------- | -------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `data-ix-events-detail-filter`     | `upcoming` \| `past` \| `all`    | `upcoming` | `upcoming` — occurrences on/after today, soonest first. `past` — occurrences that have already ended, most recent first. `all` — the event's full occurrence history, oldest to newest, one continuous list, bounded to roughly ±3 years from today (or the event's own Start Date / Recurring End Date, if narrower) — a truly indefinite recurring series has no literal "all." |
+| `data-ix-events-item-count`        | number                            | `12`       | Same name/meaning as List View and Feed View — how many occurrence rows to reveal on init and per `Load More` click.                                                                                     |
+
+### Next occurrence behavior
+
+Non-recurring events always show their own Start/End Date, even if it's already past — there's no other sensible value, and it matches what a raw Start Date field would show anyway. Recurring events search forward from today for the soonest occurrence that hasn't ended yet.
+
+---
+
 ## Notes
 
 - No run gates (`-site-run` / `-page-run` / `-run`) and no breakpoint disabling — every view is functional, not decorative, so it always runs if its elements/attributes are present.
 - Any combination of List View, Feed View, and Calendar can coexist on the same page (e.g. a layout toggle) and will, by default, read the same page-level `[data-ix-events="data-wrap"]` source — no risk of them drifting apart, unless one instance deliberately opts into its own local data-wrap (see §1).
+- Event Detail (§5) is the exception — it never reads `[data-ix-events="data-wrap"]` at all, since a CMS template page has exactly one event and no Collection List. It's unaffected by, and doesn't affect, any other view's data-wrap resolution.

@@ -12,19 +12,20 @@ Core idea: recurrence (Daily/Weekly/Monthly/Yearly + interval + skip dates + opt
 
 ```
 src/
-  index.js             — entry point; imports and calls eventList(), eventFeed(), calendar()
+  index.js             — entry point; imports and calls eventList(), eventFeed(), eventDetail(), calendar()
   utilities.js         — shared utility functions (attr, uniquifyIds)
-  date-utils.js        — shared date math + formatting (range stepping, token formatting, FULLDATE), no DOM
+  date-utils.js        — shared date math + formatting (range stepping, expanding search, token formatting, FULLDATE), no DOM
   recurrence.js        — shared recurrence engine (getOccurrences), no DOM
   recurrence.test.js   — unit tests for recurrence.js (node --test)
-  event-data.js        — shared data lookup (whenEvents)
+  event-data.js        — shared data lookup (whenEvents) — Collection-List-oriented, not used by event-detail.js
   event-list.js        — List View (data-ix-events-layout="list") + Feed View (data-ix-events-layout="feed")
+  event-detail.js       — Event Detail (data-ix-events-layout="detail"), for the CMS item template page
   calendar.js          — Calendar (data-ix-events-layout="calendar")
 ```
 
 ### index.js
 
-`index.js` is flat — no matchMedia/reduceMotion block, no Lenis instance. It just calls `eventList()`, `eventFeed()`, and `calendar()` on `DOMContentLoaded`; each function no-ops if its wrap selector isn't found on the page.
+`index.js` is flat — no matchMedia/reduceMotion block, no Lenis instance. It just calls `eventList()`, `eventFeed()`, `eventDetail()`, and `calendar()` on `DOMContentLoaded`; each function no-ops if its wrap selector isn't found on the page.
 
 ---
 
@@ -82,13 +83,14 @@ All interactions live flat in `src/`:
 
 - `recurrence.js` — shared recurrence engine (`getOccurrences`), no DOM, used by every view below
 - `event-data.js` — shared data lookup (`whenEvents(wrap, callback)`, called once per wrap, not once per page); resolves each wrap's own `[data-ix-events="data-wrap"]` via `resolveDataWrap()` — a `data-wrap` nested inside that specific wrap wins if present, otherwise the first page-level one (classified by `closest('[data-ix-events="wrap"]') === null`, not just "not inside `wrap`" — matters if a wrap is ever nested inside another wrap, since a naive local search via `wrap.querySelectorAll()` is recursive and would otherwise let an outer wrap steal a nested child wrap's own local override). Lets most pages use one shared source with zero config, while any instance can opt into its own scoped data purely by nesting a `data-wrap` inside its own wrap
-- `date-utils.js` — shared date math + formatting: `formatOccurrenceDate`/token vocabulary, `formatFullDate`/`FULLDATE`, `setDateFields` (writes formatted text into any `[data-ix-events="date"]` element), `formatWeekLabel`, and range-stepping helpers (`anchorFor`, `getRangeBounds`, `stepCurrent`, `stepPeriodEnd`, `startOfWeek`, `startOfDay`, `addDays`). No DOM except `setDateFields`. Used by both `event-list.js` and `calendar.js` so date formatting/range math only ever works one way
-- `event-list.js` — exports two views, sharing internal helpers (`buildEntries`, `whenListReady`, `createOccurrenceCard`) since they overlap heavily:
+- `date-utils.js` — shared date math + formatting: `formatOccurrenceDate`/token vocabulary, `formatFullDate`/`FULLDATE`, `setDateFields` (writes formatted text into any `[data-ix-events="date"]` element), `formatWeekLabel`, range-stepping helpers (`anchorFor`, `getRangeBounds`, `stepCurrent`, `stepPeriodEnd`, `stepPeriodStart`, `startOfWeek`, `startOfDay`, `addDays`), and `expandingWindowSearch`/`SEARCH_CAP` — a direction-agnostic, DOM-free "grow a bounded window one period at a time until enough results are found or a cap is hit" helper shared by `eventFeed()`'s `Load More` and `event-detail.js`'s next-occurrence/occurrence-list searches. No DOM except `setDateFields`. Used by `event-list.js`, `event-detail.js`, and `calendar.js` so date formatting/range math only ever works one way
+- `event-list.js` — exports two views, sharing internal helpers (`buildEntries`, `whenListReady`, `createOccurrenceCard`, `resolveLoadMore`, `readItemCount`, `mergeOccurrences`) since they overlap heavily — the last four are also exported for reuse by `event-detail.js`:
   - `eventList()` — month/week List View (`data-ix-events-layout="list"`), expands/filters a native Webflow Collection List in place via Finsweet (see below), with prev/next/today stepping
-  - `eventFeed()` — linear Feed View (`data-ix-events-layout="feed"`), always-upcoming-from-today, grows via a `Load More` button, optional month-boundary divider elements. Bypasses Finsweet's filter/render pipeline entirely (see below) — purely additive rendering, so there's nothing to filter
+  - `eventFeed()` — linear Feed View (`data-ix-events-layout="feed"`), upcoming-from-today (default) or past-from-today (`data-ix-events-direction="past"`), grows via a `Load More` button, optional month-boundary divider elements. Bypasses Finsweet's filter/render pipeline entirely (see below) — purely additive rendering, so there's nothing to filter. A Feed instance with no `load-more` element and `feed-divider="false"` is also the recommended way to build a small, fixed-count "showcase" section anywhere on the site — see README §3
+- `event-detail.js` — Event Detail (`data-ix-events-layout="detail"`), for the Events collection's own CMS item template page. Exactly one event, no Collection List — parses its own `[data-ix-events="data"]` synchronously via `parseEventFromJSON`, bypassing `event-data.js`'s Collection-List-oriented `whenEvents()` entirely. Renders a "next occurrence" date (non-recurring events always fall back to their own Start/End Date, even if past) and a filterable/paginated occurrence list (`data-ix-events-detail-filter="upcoming"|"past"|"all"`), reusing `event-list.js`'s exported `createOccurrenceCard`/`resolveLoadMore`/`readItemCount` and `date-utils.js`'s `expandingWindowSearch` rather than duplicating that logic
 - `calendar.js` — month/week grid Calendar (`data-ix-events-layout="calendar"`), rebuilt to be fully Webflow-authored (see "Calendar rendering model" below) — no Finsweet dependency, no Collection List; day cells/pills/hover-card are all Designer-built elements the script fills in and positions
 
-All three (`eventList`, `eventFeed`, `calendar`) read `[data-ix-events="wrap"]` elements and self-filter on `data-ix-events-layout`, so any combination on one page shares one attribute contract instead of separate ones.
+All four (`eventList`, `eventFeed`, `eventDetail`, `calendar`) read `[data-ix-events="wrap"]` elements and self-filter on `data-ix-events-layout`, so any combination on one page shares one attribute contract instead of separate ones.
 
 List View's and Feed View's cards can both live in the same Collection List as the JSON data, or in a completely separate one — `buildEntries()` auto-detects per item (JSON nested in the item = combined; no JSON = looks up by `data-ix-events-slug` against that wrap's own resolved data-wrap instead). Because `whenEvents` is now called once per wrap (not once per layout, shared across every wrap of that layout), `eventList()`/`eventFeed()` both moved their `whenEvents(...)` call inside their own `wraps.forEach(...)` loop — each wrap gets its own independent resolution and its own `eventsBySlug` map, rather than one shared map built once upfront. Calendar's optional hover-cards use the same slug-matching idea (see README §4) but there's no `buildEntries()`-style shared helper for it — it's a much simpler one-off `Map` built directly in `calendar.js`, since a hover-card isn't a per-occurrence clone the way List/Feed cards are.
 
