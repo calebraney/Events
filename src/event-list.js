@@ -216,7 +216,9 @@ import {
 //                                        support here — it needs a specific
 //                                        occurrence's show-flags, which a
 //                                        divider isn't tied to). Default
-//                                        "MMMM, YYYY" (e.g. "July, 2026").
+//                                        "MMMM YYYY" (e.g. "July 2026") —
+//                                        matches List View's/Calendar's own
+//                                        label default.
 //
 // Options (all read from the wrap element):
 //   data-ix-events-duplicate-recurring="true" (default) | "false"
@@ -741,7 +743,7 @@ function initFeed(wrap, eventsBySlug) {
         const monthKey = `${occurrence.start.getFullYear()}-${occurrence.start.getMonth()}`;
         if (currentDividerMonthKey === null || monthKey !== currentDividerMonthKey) {
           const isFirstDividerEver = currentDividerMonthKey === null;
-          const format = attr('MMMM, YYYY', dividerTextEl?.getAttribute('data-ix-events-date-format'));
+          const format = attr('MMMM YYYY', dividerTextEl?.getAttribute('data-ix-events-date-format'));
           const showTodayLabel = isFirstDividerEver && feedDividerToday && filter === 'upcoming';
           const text = showTodayLabel ? 'Today' : formatOccurrenceDate(occurrence.start, format);
           container.appendChild(createDivider(text));

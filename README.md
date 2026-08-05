@@ -285,7 +285,7 @@ None beyond the shared data source (§1) and Combined/Separate card setup (same 
 
 ### Divider text format
 
-`data-ix-events-date-format` on the `[data-ix-events="feed-divider-text"]` element — same token vocabulary as the card's date-format (see [Format tokens](#format-tokens) above), but no `DATE-TIME`/`DATE` support (a divider isn't tied to a specific occurrence's show-flags). Default `"MMMM, YYYY"` → `"July, 2026"`.
+`data-ix-events-date-format` on the `[data-ix-events="feed-divider-text"]` element — same token vocabulary as the card's date-format (see [Format tokens](#format-tokens) above), but no `DATE-TIME`/`DATE` support (a divider isn't tied to a specific occurrence's show-flags). Default `"MMMM YYYY"` → `"July 2026"` — matches List View's and Calendar's own label default.
 
 ### Load More behavior
 
