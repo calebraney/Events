@@ -132,12 +132,15 @@ import {
 //                                        formatting UI. Always formats the occurrence's
 //                                        START date/time (the recurring date for a
 //                                        recurring event) — never the end.
-//                                        Special value "FULLDATE" (instead of a token
-//                                        string) composes a full human-readable string
-//                                        from the occurrence's own start/end plus the
-//                                        event's Show Start Time / Show End Time / Show
-//                                        End Date flags, e.g. "June 14th", "June 14th at
-//                                        8pm", "June 14th, 8-9pm", "June 14-16th, 12pm-5pm".
+//                                        Special values "DATE-TIME" and "DATE" (instead
+//                                        of a token string) compose a human-readable
+//                                        string from the occurrence's own start/end plus
+//                                        the event's Show Start Time / Show End Time /
+//                                        Show End Date flags — "DATE-TIME" includes time,
+//                                        e.g. "June 14th", "June 14th at 8pm", "June 14th,
+//                                        8-9pm", "June 14-16th, 12pm-5pm"; "DATE" never
+//                                        includes a time, only the (potentially multi-day)
+//                                        date, e.g. "June 14th" or "June 14-16th".
 //     [data-ix-events="load-more-wrap"]  optional — see data-ix-events-item-count below.
 //       [data-ix-events="load-more"]       optional — button, reveals the next
 //                                          batch of occurrences within the active range.
@@ -187,7 +190,7 @@ import {
 //                                          load-more-wrap is present, this can
 //                                          instead live anywhere inside wrap.
 //     ...the card Collection List (A or B above)...
-//       [data-ix-events="date"]          same as List View, incl. FULLDATE
+//       [data-ix-events="date"]          same as List View, incl. DATE-TIME/DATE
 //     [data-ix-events="feed-divider"]  optional — divider template element,
 //                                        a sibling of the card Collection List
 //                                        (not inside it). Expected to carry
@@ -209,7 +212,7 @@ import {
 //       [data-ix-events="feed-divider-text"]  child of the divider above,
 //                                        text updated per instance.
 //         data-ix-events-date-format="{format}"  same token vocabulary as
-//                                        the card's date-format (no FULLDATE
+//                                        the card's date-format (no DATE-TIME/DATE
 //                                        support here — it needs a specific
 //                                        occurrence's show-flags, which a
 //                                        divider isn't tied to). Default
@@ -674,9 +677,6 @@ function initFeed(wrap, eventsBySlug) {
   const dividerTemplate = wrap.querySelector(FEED_DIVIDER_EL);
   const dividerTextEl = dividerTemplate?.querySelector(FEED_DIVIDER_TEXT_EL);
   debugLog('[event-feed] initFeed: duplicateRecurring =', duplicateRecurring, '| itemCount =', itemCount, '| feedPeriod =', feedPeriod, '| feedDivider =', feedDivider, '| feedDividerToday =', feedDividerToday, '| filter =', filter, '| sort =', sortDirection || '(default)', '| loadMoreBtn found:', !!loadMoreBtn, '| dividerTemplate found:', !!dividerTemplate);
-  if (feedDivider && !dividerTemplate) {
-    console.warn('event-feed: feed-divider is enabled but no [data-ix-events="feed-divider"] element was found.', wrap);
-  }
 
   let renderedCount = 0;
   let currentDividerMonthKey = null;

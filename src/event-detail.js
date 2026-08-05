@@ -28,22 +28,42 @@ import { createOccurrenceCard, readItemCount, CLONE_ATTR } from './event-list';
 //                                 page's own event fields, same shape as
 //                                 every other view's hidden JSON embed (see
 //                                 README.md).
-//     [data-ix-events="next-date"]   optional — the next upcoming
-//                                 occurrence's date. Non-recurring events
-//                                 always use their own Start/End Date (even
-//                                 if in the past — there's no other sensible
-//                                 value). For a recurring event whose series
-//                                 has already ended, this element is hidden
-//                                 entirely. Put data-ix-events-date-format
-//                                 directly on this element and its own text
-//                                 updates (same contract as every other view
-//                                 — tokens / FULLDATE / TIME / TIME-SHORT) —
-//                                 OR nest a separate [data-ix-events="date"]
+//     [data-ix-events="start-date"]   optional, REPEATABLE — this event's
+//                                 own literal Start/End Date, exactly as
+//                                 authored in Webflow — never a computed
+//                                 occurrence, and never hidden (Start Date is
+//                                 required, so there's always a value).
+//                                 Useful for a non-recurring event's combined
+//                                 date+time string (e.g. DATE-TIME) without
+//                                 involving occurrence search at all. Same
+//                                 data-ix-events-date-format contract as
+//                                 next-date below (self-target, or a nested
+//                                 [data-ix-events="date"] child). A wrap can
+//                                 have more than one — e.g. a DATE-only
+//                                 element and a separate TIME-only element —
+//                                 each independently formatted; ALL matching
+//                                 elements get updated, not just the first.
+//     [data-ix-events="next-date"]   optional, REPEATABLE — the next
+//                                 upcoming occurrence's date. Non-recurring
+//                                 events always use their own Start/End Date
+//                                 (even if in the past — there's no other
+//                                 sensible value, same as start-date above —
+//                                 the two are identical for a non-recurring
+//                                 event). For a recurring event whose series
+//                                 has already ended, every matching element
+//                                 is hidden entirely. Put
+//                                 data-ix-events-date-format directly on an
+//                                 element and its own text updates (same
+//                                 contract as every other view — tokens /
+//                                 DATE-TIME / DATE / TIME / TIME-SHORT) — OR
+//                                 nest a separate [data-ix-events="date"]
 //                                 child inside it instead, if you need other
 //                                 markup (an icon, a label) alongside the
 //                                 date text; when a nested date child exists,
 //                                 that's what gets updated instead of this
-//                                 element's own text.
+//                                 element's own text. Same repeatable
+//                                 (multiple independently-formatted
+//                                 elements) support as start-date above.
 //     [data-ix-events="dates-list"]   optional, repeatable — a wrapper
 //                                 that both holds this list's own options
 //                                 (below) and is what clones get appended
@@ -98,6 +118,7 @@ const DETAIL_LAYOUT = 'detail';
 const WRAP = '[data-ix-events="wrap"]';
 const DATA_EL = '[data-ix-events="data"]';
 const NEXT_DATE_EL = '[data-ix-events="next-date"]';
+const START_DATE_EL = '[data-ix-events="start-date"]';
 const DATES_LIST = '[data-ix-events="dates-list"]';
 const DATES_ITEM = '[data-ix-events="dates-item"]';
 const DATE_EL = '[data-ix-events="date"]';
@@ -161,6 +182,7 @@ export const eventDetail = function () {
     }
     const event = parseWrapEvent(wrap);
     if (!event) return;
+    renderStartDate(wrap, event);
     renderNextOccurrence(wrap, event);
     queryOwnAll(wrap, DATES_LIST).forEach((listEl, i) => initDatesList(listEl, event, i));
   });
@@ -185,12 +207,33 @@ function parseWrapEvent(wrap) {
   }
 }
 
+// The event's own literal Start/End Date, exactly as authored in Webflow —
+// never a computed occurrence, regardless of whether the event recurs.
+// Shared by start-date (always this) and findNextOccurrence's non-recurring
+// fallback (a non-recurring event's "next occurrence" IS just this).
+function rawOccurrence(event) {
+  return { start: event.startDate, end: event.endDate || event.startDate };
+}
+
+// Updates EVERY [data-ix-events="start-date"] element found (not just the
+// first) — a page can have more than one, e.g. a DATE-formatted element and
+// a separate TIME-formatted element, both showing the same underlying
+// start/end. Confirmed live: with the old find-the-first-one behavior, a
+// second start-date element silently never got its text updated at all,
+// permanently showing whatever placeholder text was authored in the
+// Designer — this looked like a formatting bug (a "missing" end time) but
+// was actually the element never being touched in the first place.
+function renderStartDate(wrap, event) {
+  const occurrence = rawOccurrence(event);
+  queryOwnAll(wrap, START_DATE_EL).forEach((el) => applyOwnOrNestedDate(el, occurrence, event));
+}
+
 // Non-recurring events have nothing to search for — they simply ARE their
 // own next (or only) occurrence, past or future. Recurring events search
 // forward from today for the soonest occurrence that hasn't ended yet.
 export function findNextOccurrence(event) {
   if (!event.recurringFrequency || event.recurringFrequency === 'None') {
-    return { start: event.startDate, end: event.endDate || event.startDate };
+    return rawOccurrence(event);
   }
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -208,17 +251,20 @@ export function findNextOccurrence(event) {
   return results[0] || null;
 }
 
+// Same "every matching element, not just the first" fix as renderStartDate.
 function renderNextOccurrence(wrap, event) {
-  const el = queryOwn(wrap, NEXT_DATE_EL);
-  if (!el) return;
+  const els = queryOwnAll(wrap, NEXT_DATE_EL);
+  if (els.length === 0) return;
   const occurrence = findNextOccurrence(event);
   debugLog('[event-detail] next occurrence for', event.name, ':', occurrence);
-  if (!occurrence) {
-    el.style.display = 'none';
-    return;
-  }
-  el.style.display = '';
-  applyOwnOrNestedDate(el, occurrence, event);
+  els.forEach((el) => {
+    if (!occurrence) {
+      el.style.display = 'none';
+      return;
+    }
+    el.style.display = '';
+    applyOwnOrNestedDate(el, occurrence, event);
+  });
 }
 
 // data-ix-events-filter="all" isn't an expanding search — it's one bounded

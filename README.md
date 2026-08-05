@@ -4,7 +4,7 @@ A reusable Webflow events system built by Caleb Raney: recurring-event CMS logic
 
 - **`recurrence.js`** — computes occurrence dates for an event (including recurring patterns) for any date range. No DOM. Used by every view below so recurrence is only ever calculated one way.
 - **`event-data.js`** — finds the one page-wide event data source and parses it, shared by every view so they can never read two different data sets.
-- **`date-utils.js`** — shared date math and formatting (range stepping, token-based date formatting, `FULLDATE`). No DOM. Used by `event-list.js` and `calendar.js` so date formatting only ever works one way.
+- **`date-utils.js`** — shared date math and formatting (range stepping, token-based date formatting, `DATE-TIME`/`DATE`). No DOM. Used by `event-list.js` and `calendar.js` so date formatting only ever works one way.
 - **`event-list.js`** — List View (`data-ix-events-layout="list"`) and Feed View (`data-ix-events-layout="feed"`). Both expand/filter a native Webflow Collection List in place; List View shows a fixed month/week window with prev/next stepping, Feed View is a linear, always-upcoming list that grows via a "Load More" button.
 - **`calendar.js`** — a month/week-grid Calendar (`data-ix-events-layout="calendar"`), built entirely from Webflow-authored elements — the Designer builds every visual piece (grid, day cells, pills, hover card), and the script only supplies dates/data and positions the pill layer.
 
@@ -42,7 +42,7 @@ Every view reads the same `events` CMS collection through one hidden JSON payloa
 | Start Date/Time                                                 | Date/Time           | Required. Includes time-of-day.                                                                                                                                                                                                                                                                                                                                                                                                       |
 | End Date/Time                                                   | Date/Time           | This occurrence's own end. For a non-recurring event: its plain end date/time. For a recurring event: only its **time-of-day** and **day offset from Start Date** are reused (see Recurring Days note below) — reapplied to every generated occurrence, so a recurring multi-day event (e.g. "the first Saturday–Sunday of every month") still spans the right number of days each time. Leave unset for a same-day, same-time event. |
 | **Recurring End Date**                                          | Date only           | The recurring series cutoff — the last day an occurrence can start on. Independent of End Date/Time. Leave empty for an indefinitely recurring event; if set at all (even to Start Date's own day), the series stops there.                                                                                                                                                                                                           |
-| Show Start Time / Show End Time / Show End Date                 | Switch              | Drive the `FULLDATE` composite format (see below) — not read anywhere else.                                                                                                                                                                                                                                                                                                                                                           |
+| Show Start Time / Show End Time / Show End Date                 | Switch              | Drive the `DATE-TIME` composite format (`DATE` only reads Show End Date — see below) — not read anywhere else.                                                                                                                                                                                                                                                                                                                       |
 | Recurring Frequency                                             | Option              | `Daily`, `Weekly`, `Monthly (same date)`, `Monthly (same day of the week)`, `Yearly`. Not required — leave it unset for a non-recurring event (this also makes it easy to filter on natively in Webflow: "is set" instead of "is set or equals None").                                                                                                                                                                            |
 | Recurring Interval                                              | Number, default `1` | "Every N [frequency units]" — e.g. Weekly + interval `2` = biweekly. Unset or `-1` is treated as `1`.                                                                                                                                                                                                                                                                                                                                 |
 | Recurring Days                                                  | Plain text          | CSV of weekday abbreviations, e.g. `Tue,Thu`. Only read when Frequency = Weekly; empty = use Start Date's own weekday. When set, each listed weekday becomes its own single-day occurrence and End Date/Time's day-offset is ignored (its time-of-day still applies).                                                                                                                                                                 |
@@ -163,8 +163,9 @@ All `true`/`false` values above are case-insensitive (`"True"`, `"FALSE"`, etc. 
 
 | Attribute                     | Applied to                             | Values                                       | Default                   |
 | ----------------------------- | -------------------------------------- | -------------------------------------------- | ------------------------- |
-| `data-ix-events-date-format`  | the `[data-ix-events="date"]` element  | a format token string (below), or `FULLDATE`, `TIME`, `TIME-SHORT` | `MMMM D, YYYY`            |
+| `data-ix-events-date-format`  | the `[data-ix-events="date"]` element  | a format token string (below), or `DATE-TIME`, `DATE`, `TIME`, `TIME-SHORT` | `MMMM D, YYYY`            |
 | `data-ix-events-label-format` | the `[data-ix-events="label"]` element | a format token string (below)                | smart default — see below |
+| `data-ix-events-include-timezone` | the `[data-ix-events="date"]` element | `true` \| `false` | `false` — see [below](#data-ix-events-include-timezone-any-date-element) |
 
 **`data-ix-events-date-format`** always formats the occurrence's own **start** date/time — for a recurring event, that's the specific date of _that_ occurrence, never the CMS item's original Start Date.
 
@@ -200,9 +201,9 @@ Same vocabulary as Webflow's own Date field formatting UI. Examples below use **
 
 Tokens combine freely, e.g. `"dddd, MMMM Do"` → `"Tuesday, August 4th"`, `"MM/DD/YYYY"` → `"08/04/2026"`. The `h`/`H`/`A`/`a`/`mm` time tokens are most useful on the per-card date element (which carries the occurrence's real start time) — a **label**'s anchor date has no meaningful time-of-day, so time tokens there would just render midnight.
 
-#### `FULLDATE` (date element only)
+#### `DATE-TIME` / `DATE` (date element only)
 
-Instead of a token string, `data-ix-events-date-format="FULLDATE"` composes a full human-readable string from the occurrence's own start/end plus the event's **Show Start Time** / **Show End Time** / **Show End Date** switches:
+Instead of a token string, `data-ix-events-date-format="DATE-TIME"` composes a human-readable string from the occurrence's own start/end plus the event's **Show Start Time** / **Show End Time** / **Show End Date** switches — including the time:
 
 | Show Start Time | Show End Time | Show End Date | Example output           |
 | --------------- | ------------- | ------------- | ------------------------ |
@@ -211,11 +212,22 @@ Instead of a token string, `data-ix-events-date-format="FULLDATE"` composes a fu
 | on              | on            | off           | `June 14th, 8-9pm`       |
 | on              | on            | on            | `June 14-16th, 12pm-5pm` |
 
-A shared meridiem is dropped from the start time when it wouldn't be ambiguous (e.g. `8-9pm` not `8pm-9pm`), but kept on 12 (noon/midnight) since "12" alone is ambiguous. `FULLDATE` isn't available on `data-ix-events-label-format` — it needs a specific occurrence's show-flags, which a label isn't tied to.
+`data-ix-events-date-format="DATE"` produces the exact same date portion — respecting **Show End Date** for a multi-day range — but **never** includes a time, regardless of **Show Start Time** / **Show End Time**:
+
+| Show End Date | Example output |
+| --- | --- |
+| off | `June 14th` |
+| on | `June 14-16th` |
+
+Useful when you want an auto-formatted date string without the event's time ever showing up in it, even if Show Start Time is on for other elements on the same page (e.g. a separate `TIME`-formatted element right next to it).
+
+A shared meridiem is dropped from `DATE-TIME`'s start time when it wouldn't be ambiguous (e.g. `8-9pm` not `8pm-9pm`), but kept on 12 (noon/midnight) since "12" alone is ambiguous. Neither `DATE-TIME` nor `DATE` is available on `data-ix-events-label-format` — they need a specific occurrence's show-flags, which a label isn't tied to.
+
+**Renamed: `FULLDATE` is now `DATE-TIME`** — the literal string `"FULLDATE"` is no longer recognized (it falls through to the plain token formatter, which won't produce useful output since none of its characters are format tokens); existing instances need updating.
 
 #### `TIME` / `TIME-SHORT` (date element only)
 
-Like `FULLDATE`, but time-only — never a date. Most useful on a calendar pill, which already lives inside a specific day-cell (repeating the date there would be redundant), but works on any date element. Driven by the same **Show Start Time** / **Show End Time** switches:
+Like `DATE-TIME`/`DATE`, but time-only — never a date. Most useful on a calendar pill, which already lives inside a specific day-cell (repeating the date there would be redundant), but works on any date element. Driven by the same **Show Start Time** / **Show End Time** switches:
 
 | Show Start Time | Show End Time | `TIME` | `TIME-SHORT` |
 | --- | --- | --- | --- |
@@ -224,11 +236,13 @@ Like `FULLDATE`, but time-only — never a date. Most useful on a calendar pill,
 | on | on (same meridiem) | `8:00-9:30pm` | `9-10:15pm` |
 | on | on (crosses meridiem) | `8:00am-5:00pm` | `7:30am-11:20pm` |
 
-`TIME` always keeps `:00`; `TIME-SHORT` drops it per side whenever that side lands exactly on the hour (independently — one side can be shortened while the other isn't, as in `9-10:15pm`). Both apply the same meridiem-collapsing rule as `FULLDATE`. Neither ever shows a range if the occurrence has no genuine duration (start equals end), even with both switches on.
-
-If the event's **Timezone** field is set to a valid [tz database](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) identifier (e.g. `America/Los_Angeles`), its short abbreviation for the occurrence's actual date is appended once at the end — `8-9pm PDT`, not `8pm PDT-9pm PDT` — computed via the browser's own `Intl.DateTimeFormat`, so it correctly reflects whichever of standard/daylight time applies on that specific date. Silently omitted if the field is empty or isn't a recognizable timezone identifier — no warning, since a blank Timezone field is a normal, valid choice. **This only ever adds a label** — the displayed hour/minute is still the wall-clock time exactly as authored in Webflow, not recalculated against the timezone (see [Timezone handling](#timezone-handling) in Notes for why). `FULLDATE` and plain token formats don't get this suffix — only `TIME`/`TIME-SHORT`.
+`TIME` always keeps `:00`; `TIME-SHORT` drops it per side whenever that side lands exactly on the hour (independently — one side can be shortened while the other isn't, as in `9-10:15pm`). Both apply the same meridiem-collapsing rule as `DATE-TIME`. Neither ever shows a range if the occurrence has no genuine duration (start equals end), even with both switches on.
 
 Unlike every other format, **`Show Start Time` off doesn't just change the output — it hides the element entirely** (`display: none`), reset back to visible (`display: ''`) the moment it would show something again. This matters specifically for calendar pills, which are freshly cloned from the template on every render, but also applies to any reused, non-cloned date element (e.g. List View's `duplicate-recurring="false"` mode, which keeps the same original card across re-filters).
+
+#### `data-ix-events-include-timezone` (any date element)
+
+`data-ix-events-include-timezone="true"` (default `false`), set alongside `data-ix-events-date-format` on the same element, appends a short timezone abbreviation once at the end of whatever that element displays — `8-9pm PDT`, not `8pm PDT-9pm PDT` — regardless of which format produced it: `DATE-TIME`, `DATE`, `TIME`/`TIME-SHORT`, or a manually-written token string (even a date-only one like `"MMMM D, YYYY"` → `"June 14, 2026 PDT"`, if that's genuinely what you want). Requires the event's **Timezone** field to be set to a valid [tz database](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) identifier (e.g. `America/Los_Angeles`) — computed via the browser's own `Intl.DateTimeFormat` against the occurrence's own date, so it correctly reflects whichever of standard/daylight time applies that specific day. Silently omitted (no suffix, no warning) if the field is empty or isn't a recognizable identifier — a blank Timezone field is a normal, valid choice. **This only ever adds a label** — the displayed hour/minute is still the wall-clock time exactly as authored in Webflow, never recalculated against the timezone (see [Timezone handling](#timezone-handling) in Notes for why).
 
 ---
 
@@ -251,7 +265,7 @@ None beyond the shared data source (§1) and Combined/Separate card setup (same 
 | `data-ix-events="load-more-wrap"`       | Wrapper, anywhere inside wrap      | No                   | Optional ancestor of `load-more` — if present, this whole wrapper is what's shown/hidden instead of the button itself.                                                                          |
 | `data-ix-events="load-more"`            | A button, inside `load-more-wrap` if present, otherwise anywhere inside wrap | No | Reveals the next batch of occurrences. Announces how many were added to screen reader users via a visually-hidden `aria-live="polite"` region.                                                  |
 | `data-ix-events="item"` / `"card"` / `"data"`, `data-ix-events-slug` | Collection List item + children | Yes (same as List View) | Same Combined/Separate mode contract as List View — see above.                                                                                                                    |
-| `data-ix-events="date"`                 | Any text element inside the card  | No (needed to display dates) | Same as List View, including `FULLDATE` — see [Format attributes](#format-attributes) above.                                                                                          |
+| `data-ix-events="date"`                 | Any text element inside the card  | No (needed to display dates) | Same as List View, including `DATE-TIME`/`DATE` — see [Format attributes](#format-attributes) above.                                                                                          |
 | `data-ix-events="feed-divider"`         | A standalone element, sibling of the card Collection List (not inside it) | No | Divider template. Give it Lumos's `u-hide` class in the Designer so it's invisible in its authored position — each inserted copy has that class removed (an inline style override can't reliably win against a typically-`!important` hide class). One is inserted automatically before the very first card in the feed, and again at every month boundary after that. If the card container is a CSS grid (multi-column feed), each divider automatically gets `grid-column: 1 / -1` so it spans every column as a full-width row — no CSS setup needed on your end, and a no-op for single-column/flex feeds. |
 | `data-ix-events="feed-divider-text"`    | Child of the divider above         | Yes, if using dividers | JS updates this element's text per divider instance.                                                                                                                                    |
 
@@ -271,7 +285,7 @@ None beyond the shared data source (§1) and Combined/Separate card setup (same 
 
 ### Divider text format
 
-`data-ix-events-date-format` on the `[data-ix-events="feed-divider-text"]` element — same token vocabulary as the card's date-format (see [Format tokens](#format-tokens) above), but no `FULLDATE` support (a divider isn't tied to a specific occurrence's show-flags). Default `"MMMM, YYYY"` → `"July, 2026"`.
+`data-ix-events-date-format` on the `[data-ix-events="feed-divider-text"]` element — same token vocabulary as the card's date-format (see [Format tokens](#format-tokens) above), but no `DATE-TIME`/`DATE` support (a divider isn't tied to a specific occurrence's show-flags). Default `"MMMM, YYYY"` → `"July, 2026"`.
 
 ### Load More behavior
 
@@ -446,11 +460,11 @@ Override any of these per-instance by setting the same custom property directly 
 
 ## 5. Event Detail (`event-detail.js`)
 
-`data-ix-events-layout="detail"` — for the Events collection's own CMS item ("template") page: exactly one event, rendered directly by Webflow, no Collection List involved. Shows (a) that event's *next upcoming occurrence* date (not its raw Start Date, which for a recurring event may be long past) and (b) one or more filterable, paginated lists of that event's occurrence dates.
+`data-ix-events-layout="detail"` — for the Events collection's own CMS item ("template") page: exactly one event, rendered directly by Webflow, no Collection List involved. Shows (a) that event's own literal Start/End Date (b) that event's *next upcoming occurrence* date (not the same thing for a recurring event, whose original Start Date may be long past) and (c) one or more filterable, paginated lists of that event's occurrence dates.
 
 Bypasses the shared `whenEvents()` data lookup used by List View/Feed/Calendar — that lookup's retry loop and Finsweet-pagination-await exist for late-rendering Collection List items, neither of which applies to a single server-rendered JSON blob. This module parses its own `[data-ix-events="data"]` synchronously instead.
 
-**Nesting another instance inside this one is safe** — e.g. put the whole template page's `main` in a `[data-ix-events="wrap"][data-ix-events-layout="detail"]`, then drop an "Other Upcoming Events" Feed View section (its own `[data-ix-events="wrap"][data-ix-events-layout="feed"]`) inside it. Every element this module looks for only matches something whose *nearest* ancestor of the relevant kind — the detail wrap for `data`/`next-date`/`dates-list`, or a specific `dates-list` for that list's own `dates-item`/`load-more`/`load-more-wrap` — is the container actually being searched. So a nested Feed section's own JSON/cards/Load More button, or a *different* dates-list's own template/button, is never mistaken for another's.
+**Nesting another instance inside this one is safe** — e.g. put the whole template page's `main` in a `[data-ix-events="wrap"][data-ix-events-layout="detail"]`, then drop an "Other Upcoming Events" Feed View section (its own `[data-ix-events="wrap"][data-ix-events-layout="feed"]`) inside it. Every element this module looks for only matches something whose *nearest* ancestor of the relevant kind — the detail wrap for `data`/`start-date`/`next-date`/`dates-list`, or a specific `dates-list` for that list's own `dates-item`/`load-more`/`load-more-wrap` — is the container actually being searched. So a nested Feed section's own JSON/cards/Load More button, or a *different* dates-list's own template/button, is never mistaken for another's.
 
 ### Requirements
 
@@ -462,10 +476,11 @@ Just the hidden JSON embed (§1's field list), placed directly on the template p
 | ----------------------------------------------------- | ---------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `data-ix-events="wrap"` + `data-ix-events-layout="detail"` | Component root                     | Yes      | Marks this element as an Event Detail instance.                                                                                                                                            |
 | `data-ix-events="data"`                                | `<script type="application/json">` inside wrap | Yes | This page's own event fields — same shape as every other view's hidden JSON embed (§1), bound directly to the current CMS item via `{{wf:Field}}` (no Collection List wrapper needed).   |
-| `data-ix-events="next-date"` (+ `data-ix-events-date-format` directly on it) | Any element inside wrap  | No       | The next occurrence's date. Set `data-ix-events-date-format` directly on this element (same contract as `date` below) and its own text updates — no separate child needed. Hidden entirely if there's genuinely no next occurrence (a recurring series whose `Recurring End Date` has already passed). If it contains a nested `[data-ix-events="date"]` child instead (e.g. to keep an icon or label alongside the date), that child is updated in its place and this element's own text is left alone. |
+| `data-ix-events="start-date"` (+ `data-ix-events-date-format` directly on it) | Any element inside wrap; **repeatable** | No | This event's own literal Start/End Date, exactly as authored in Webflow — never a computed occurrence, and never hidden (Start Date is required, so there's always a value). Same self-target-or-nested-child contract as `next-date` below. Most useful for a non-recurring event's combined date+time string (e.g. `DATE-TIME`, or `DATE` if you don't want the time) without involving occurrence search at all — for a recurring event, this is its original Start Date, not the next upcoming one (that's what `next-date` is for). A wrap can have more than one, each with its own `data-ix-events-date-format` — e.g. a `DATE`-only element and a separate `TIME`-only element — **every** matching element is updated, not just the first. |
+| `data-ix-events="next-date"` (+ `data-ix-events-date-format` directly on it) | Any element inside wrap; **repeatable** | No       | The next occurrence's date. Set `data-ix-events-date-format` directly on this element (same contract as `date` below) and its own text updates — no separate child needed. Hidden entirely if there's genuinely no next occurrence (a recurring series whose `Recurring End Date` has already passed). If it contains a nested `[data-ix-events="date"]` child instead (e.g. to keep an icon or label alongside the date), that child is updated in its place and this element's own text is left alone. Identical to `start-date` for a non-recurring event — the two only diverge for a recurring one. Same repeatable (multiple, independently-formatted elements) support as `start-date`. |
 | `data-ix-events="dates-list"`                          | Wrapper, anywhere inside wrap; repeatable | No     | Both the container clones get appended into **and** the scope for that list's own options (below) — a page can have more than one, e.g. a short "upcoming" list and a separate "past" list, each configured independently. Hidden entirely if this specific list has zero occurrences on init (e.g. an "upcoming" list for an event whose recurring series has already ended).                                                                            |
 | `data-ix-events="dates-item"` (+ `data-ix-events-date-format` directly on it) | Template row, inside a `dates-list` | No | One occurrence's row for that specific list. Hidden after init; clones are appended into the `dates-list` as more are revealed. Same "one attribute is enough" self-target as `next-date` — set `data-ix-events-date-format` directly on this element and its own text updates, no separate `date` child needed (or nest one instead if you need other markup alongside the date). |
-| `data-ix-events="date"`                                | Any text element inside `next-date` or `dates-item` | No | Same `data-ix-events-date-format` contract as every other view, including `FULLDATE` — see [Format attributes](#format-attributes).                                                        |
+| `data-ix-events="date"`                                | Any text element inside `start-date`, `next-date`, or `dates-item` | No | Same `data-ix-events-date-format` contract as every other view, including `DATE-TIME`/`DATE` — see [Format attributes](#format-attributes).                                                        |
 | `data-ix-events="load-more-wrap"` / `"load-more"`      | Inside a `dates-list`                     | No       | Reveals the next batch of that list's occurrence rows. Announces how many were added to screen reader users via a visually-hidden `aria-live="polite"` region scoped to that `dates-list`.  |
 
 ### Option attributes (read from each `dates-list` element — NOT the wrap)
@@ -480,9 +495,9 @@ Just the hidden JSON embed (§1's field list), placed directly on the template p
 
 Each `dates-list` on the page is fully independent — its own filter, its own sort, its own item count, its own template/Load More. A common pattern: two `dates-list` wraps on one page, one with `data-ix-events-filter="upcoming"` and one with `"past"`.
 
-### Next occurrence behavior
+### Start date vs. next occurrence
 
-Non-recurring events always show their own Start/End Date, even if it's already past — there's no other sensible value, and it matches what a raw Start Date field would show anyway. Recurring events search forward from today for the soonest occurrence that hasn't ended yet.
+`start-date` always shows the event's own literal Start/End Date — no occurrence search, no recurrence awareness, just the raw CMS fields, formatted. `next-date` searches for the soonest occurrence that hasn't ended yet (recurring events only — non-recurring events always show their own Start/End Date here too, even if it's already past, since there's no other sensible value). For a non-recurring event the two elements always show the same date; for a recurring event they diverge — `start-date` stays pinned to the original Start Date (which may be long past for an established recurring series) while `next-date` tracks whatever's actually coming up next. Use `start-date` when you just want a clean, auto-formatted date string with no occurrence logic involved (e.g. a non-recurring event's hero date), and `next-date` when you specifically want "what's the next time this happens."
 
 ---
 

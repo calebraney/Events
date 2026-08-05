@@ -189,7 +189,7 @@ function claimForInit(wrap) {
 // so they're always safe to drop straight into textContent — arrays (the
 // two recurring-* CSV fields) join with ", ". Date/time fields aren't here:
 // they need real formatting, not raw display, and are already covered by
-// the `date` element + TIME/TIME-SHORT/FULLDATE/token formats (see
+// the `date` element + TIME/TIME-SHORT/DATE-TIME/DATE/token formats (see
 // setDateFields in date-utils.js).
 const PILL_TEXT_FIELDS = {
   name: (event) => event.name,
