@@ -264,8 +264,8 @@ function formatClockTime(date) {
 // own data-ix-events-date-format — the per-element logic setDateFields()
 // runs for every matched descendant. Exported separately so a caller can
 // apply it to a specific element that isn't itself found via the
-// [data-ix-events="date"] role (see event-detail.js's next-occurrence
-// self-target fallback).
+// [data-ix-events="date"] role (see event-detail.js's next-date self-target
+// fallback).
 export function applyDateFormat(el, occurrence, event) {
   const format = attr('MMMM D, YYYY', el.getAttribute('data-ix-events-date-format'));
   if (isTimeFormat(format)) {

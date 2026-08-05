@@ -257,13 +257,32 @@ const ITEM = '[data-ix-events="item"]';
 const DATA_EL = '[data-ix-events="data"]';
 const CARD_EL = '[data-ix-events="card"]';
 const SLUG_ATTR = 'data-ix-events-slug';
-const CLONE_ATTR = 'data-ix-events-clone';
+export const CLONE_ATTR = 'data-ix-events-clone';
 const DISABLED_CLASS = 'is-disabled';
 const FS_LIST_SELECTOR = '[fs-list-element="list"]';
 const LOAD_MORE_WRAP = '[data-ix-events="load-more-wrap"]';
 const LOAD_MORE_BTN = '[data-ix-events="load-more"]';
 const FEED_DIVIDER_EL = '[data-ix-events="feed-divider"]';
 const FEED_DIVIDER_TEXT_EL = '[data-ix-events="feed-divider-text"]';
+const INITIALIZED_ATTR = 'data-ix-events-initialized';
+
+// Marks `wrap` as processed and returns true the FIRST time it's called for
+// a given wrap, false every time after — guards against a wrap getting
+// initialized twice (e.g. a page-transition script re-running this bundle
+// on soft navigation, without a full page reload). Without this, a second
+// eventFeed() pass would re-scan the DOM for [data-ix-events="item"]
+// elements, which by then ALSO matches clones from the first pass (they
+// still carry the same item/card structure) — inflating the source pool —
+// and, since Feed only ever appends and starts a fresh renderedCount=0 in
+// its own closure with no memory of the first pass, would pile on an
+// entirely separate batch on top rather than skipping cleanly. Confirmed
+// live: exactly this symptom (more cards than item-count, inconsistent
+// dates between what looks like two overlapping renders).
+function claimForInit(wrap) {
+  if (wrap.hasAttribute(INITIALIZED_ATTR)) return false;
+  wrap.setAttribute(INITIALIZED_ATTR, '');
+  return true;
+}
 
 // ── List View ────────────────────────────────────────────────────────────
 
@@ -285,6 +304,10 @@ export const eventList = function () {
   // 6 seconds, of pure wasted retrying before it gave up and proceeded
   // anyway with an eventsBySlug map nothing ended up using).
   wraps.forEach((wrap) => {
+    if (!claimForInit(wrap)) {
+      debugLog('[event-list] wrap already initialized, skipping:', wrap);
+      return;
+    }
     const withEvents = (events) => {
       debugLog('[event-list] whenEvents callback fired, events received:', events.length, events);
       const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
@@ -524,6 +547,10 @@ export const eventFeed = function () {
   // whenEvents is called per-wrap — see the matching note (and needsSharedData
   // skip) in eventList().
   wraps.forEach((wrap) => {
+    if (!claimForInit(wrap)) {
+      debugLog('[event-feed] wrap already initialized, skipping:', wrap);
+      return;
+    }
     const withEvents = (events) => {
       debugLog('[event-feed] whenEvents callback fired, events received:', events.length, events);
       const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
@@ -546,7 +573,14 @@ export const eventFeed = function () {
 
 function initFeed(wrap, eventsBySlug) {
   const entries = buildEntries(wrap, eventsBySlug);
-  debugLog('[event-feed] initFeed: entries found for wrap:', entries.length, wrap);
+  const cardTotal = allCardItems(wrap).length;
+  debugLog('[event-feed] initFeed: entries found for wrap:', entries.length, 'of', cardTotal, 'card item(s) total', wrap);
+  if (cardTotal > entries.length) {
+    console.warn(
+      `event-feed: ${cardTotal - entries.length} card item(s) in this wrap failed to parse into usable events — see warnings above for which and why. Those cards are hidden (never shown), not included in the feed.`,
+      wrap
+    );
+  }
   if (entries.length === 0) return;
 
   const duplicateRecurring = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-duplicate-recurring`));
@@ -561,10 +595,19 @@ function initFeed(wrap, eventsBySlug) {
   // Templates only — every visible feed card is a clone, since occurrences
   // from different events interleave chronologically across the whole feed,
   // so no single event's "own" card can stay in its native DOM position.
+  // Hides EVERY genuine card item (allCardItems(wrap)), not just the ones
+  // that became valid `entries` — a card whose data failed to parse into a
+  // usable entry (bad JSON, no Start Date, a missing slug match) must still
+  // be hidden, not left visible with stale, un-computed placeholder text.
+  // Confirmed live: a card missing its event data stayed permanently
+  // visible in its native, unsorted position, showing whatever text a
+  // content editor had originally typed into it in the Designer.
   const container = entries[0].item.parentElement;
-  entries.forEach(({ item }) => {
+  allCardItems(wrap).forEach((item) => {
     item.style.display = 'none';
+    watchAndKeepHidden(item);
   });
+  watchForLateItems(container);
 
   const { loadMoreWrap, loadMoreBtn } = resolveLoadMore(wrap);
   const loadMoreTarget = loadMoreWrap || loadMoreBtn;
@@ -678,9 +721,25 @@ function needsSharedData(wrap) {
   return [...wrap.querySelectorAll(ITEM)].some((item) => item.querySelector(CARD_EL) && !item.querySelector(DATA_EL));
 }
 
+// Every genuine (non-clone) card item in wrap, regardless of whether it goes
+// on to successfully parse into a usable entry below — Feed View uses this
+// (not buildEntries()'s return value) to decide what to hide, since a card
+// whose data fails to parse must still be hidden as a template, not left
+// visible with whatever placeholder text a content editor originally typed
+// into it. Excludes CLONE_ATTR-tagged items — a clone carries the same
+// item/card structure as its template, so without this a clone could get
+// mistaken for a fresh source item (see claimForInit()'s header comment for
+// when this matters: it shouldn't happen with that guard in place, but this
+// is the correct invariant regardless of how initialization gets triggered).
+function allCardItems(wrap) {
+  return [...wrap.querySelectorAll(ITEM)].filter(
+    (item) => item.querySelector(CARD_EL) && !item.hasAttribute(CLONE_ATTR)
+  );
+}
+
 // Item↔event pairing, combined (A) or separate (B) mode — used by both views.
 function buildEntries(wrap, eventsBySlug) {
-  const cardItems = [...wrap.querySelectorAll(ITEM)].filter((item) => item.querySelector(CARD_EL));
+  const cardItems = allCardItems(wrap);
   if (cardItems.length === 0) return [];
 
   return cardItems
@@ -707,7 +766,11 @@ function buildEntries(wrap, eventsBySlug) {
           return null;
         }
       }
-      return event.startDate ? { item, event } : null;
+      if (!event.startDate) {
+        console.warn('event-list: event JSON has no valid Start Date — this card will never be shown.', item);
+        return null;
+      }
+      return { item, event };
     })
     .filter(Boolean);
 }
@@ -775,7 +838,9 @@ function whenListReady(wrap, required, callback) {
         callback(null);
         return;
       }
-      Promise.resolve(listInstance.loadingPaginatedItems).then(() => callback(listInstance));
+      Promise.resolve(listInstance.loadingPaginatedItems)
+        .then(() => waitForDomSettle(list))
+        .then(() => callback(listInstance));
     },
   ]);
 }
@@ -815,4 +880,79 @@ function watchAndUnhide(el) {
     if (el.style.display === 'none') el.style.display = '';
   });
   observer.observe(el, { attributes: true, attributeFilter: ['style'] });
+}
+
+// The mirror-image bug: Feed View's original template items must STAY
+// hidden once initFeed() hides them, but simply carrying
+// fs-list-element="list" is enough for Finsweet to run its own independent
+// render pass over the Collection List — on its own schedule, regardless of
+// whether Feed ever calls addHook/createItem itself — which can reset an
+// item's inline display back to visible at an unpredictable point AFTER our
+// own hiding already ran. Confirmed live: a reload showed a different
+// subset of originals stuck visible each time (a genuine race, not a
+// deterministic bug — the count varied 5-9 across reloads of the same
+// page). Same fix shape as watchAndUnhide() above, opposite direction.
+function watchAndKeepHidden(el) {
+  const observer = new MutationObserver(() => {
+    if (el.style.display !== 'none') el.style.display = 'none';
+  });
+  observer.observe(el, { attributes: true, attributeFilter: ['style'] });
+}
+
+// Root cause of the "Feed shows more cards than item-count, wrong order,
+// inconsistent count" bug: `listInstance.loadingPaginatedItems` resolving is
+// NOT proof that every fs-list-load="all" page has actually landed in the
+// DOM yet — confirmed live via a captured page snapshot where exactly the
+// LAST Webflow-native page (page 4 of 4) of a paginated list was still fully
+// visible (no display:none at all) while every earlier page's items were
+// correctly hidden. Those items were never late-hidden by Finsweet re-
+// showing them (that's watchAndKeepHidden's job, and it only protects
+// elements it already knows about) — they simply didn't exist in the DOM
+// yet when initFeed()'s one-time hide pass ran, and buildEntries() ran
+// before them too, meaning even the *set of candidate events* the feed
+// searched for its "next N" batch was incomplete. Waits for the list
+// container to go quiet (no new child items appended) for `quietMs` before
+// resolving, up to `maxWaitMs` total so a genuinely stalled/slow load can't
+// hang initFeed() forever.
+function waitForDomSettle(container, quietMs = 150, maxWaitMs = 4000) {
+  return new Promise((resolve) => {
+    let settled = false;
+    let quietTimer;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      observer.disconnect();
+      clearTimeout(quietTimer);
+      clearTimeout(maxTimer);
+      resolve();
+    };
+    const observer = new MutationObserver(() => {
+      clearTimeout(quietTimer);
+      quietTimer = setTimeout(finish, quietMs);
+    });
+    observer.observe(container, { childList: true });
+    quietTimer = setTimeout(finish, quietMs);
+    const maxTimer = setTimeout(finish, maxWaitMs);
+  });
+}
+
+// Defense-in-depth for the same bug: even after waitForDomSettle(), keep
+// watching for any genuine (non-clone) card item appended to the container
+// after initFeed()'s initial hide pass, and hide it immediately. Covers any
+// page that still arrives later than expected (e.g. an unusually slow
+// fs-list-load="all" fetch) without leaving a stray original card visible.
+function watchForLateItems(container) {
+  const observer = new MutationObserver((mutations) => {
+    mutations.forEach((mutation) => {
+      mutation.addedNodes.forEach((node) => {
+        if (node.nodeType !== 1) return;
+        if (!node.matches?.(ITEM)) return;
+        if (node.hasAttribute(CLONE_ATTR)) return;
+        if (!node.querySelector(CARD_EL)) return;
+        node.style.display = 'none';
+        watchAndKeepHidden(node);
+      });
+    });
+  });
+  observer.observe(container, { childList: true });
 }

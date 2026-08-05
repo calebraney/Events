@@ -488,6 +488,12 @@
   var LOAD_MORE_BTN = '[data-ix-events="load-more"]';
   var FEED_DIVIDER_EL = '[data-ix-events="feed-divider"]';
   var FEED_DIVIDER_TEXT_EL = '[data-ix-events="feed-divider-text"]';
+  var INITIALIZED_ATTR = "data-ix-events-initialized";
+  function claimForInit(wrap) {
+    if (wrap.hasAttribute(INITIALIZED_ATTR)) return false;
+    wrap.setAttribute(INITIALIZED_ATTR, "");
+    return true;
+  }
   var eventList = function() {
     const wraps = [...document.querySelectorAll(WRAP2)].filter(
       (wrap) => wrap.getAttribute("data-ix-events-layout") === LIST_LAYOUT
@@ -495,6 +501,10 @@
     debugLog('[event-list] wraps with layout="list" found:', wraps.length, wraps);
     if (wraps.length === 0) return;
     wraps.forEach((wrap) => {
+      if (!claimForInit(wrap)) {
+        debugLog("[event-list] wrap already initialized, skipping:", wrap);
+        return;
+      }
       const withEvents = (events) => {
         debugLog("[event-list] whenEvents callback fired, events received:", events.length, events);
         const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
@@ -678,6 +688,10 @@
     debugLog('[event-feed] wraps with layout="feed" found:', wraps.length, wraps);
     if (wraps.length === 0) return;
     wraps.forEach((wrap) => {
+      if (!claimForInit(wrap)) {
+        debugLog("[event-feed] wrap already initialized, skipping:", wrap);
+        return;
+      }
       const withEvents = (events) => {
         debugLog("[event-feed] whenEvents callback fired, events received:", events.length, events);
         const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
@@ -693,7 +707,14 @@
   };
   function initFeed(wrap, eventsBySlug) {
     const entries = buildEntries(wrap, eventsBySlug);
-    debugLog("[event-feed] initFeed: entries found for wrap:", entries.length, wrap);
+    const cardTotal = allCardItems(wrap).length;
+    debugLog("[event-feed] initFeed: entries found for wrap:", entries.length, "of", cardTotal, "card item(s) total", wrap);
+    if (cardTotal > entries.length) {
+      console.warn(
+        `event-feed: ${cardTotal - entries.length} card item(s) in this wrap failed to parse into usable events \u2014 see warnings above for which and why. Those cards are hidden (never shown), not included in the feed.`,
+        wrap
+      );
+    }
     if (entries.length === 0) return;
     const duplicateRecurring = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-duplicate-recurring`));
     const itemCount = readItemCount(wrap, 12);
@@ -704,9 +725,11 @@
     let direction = attr("upcoming", wrap.getAttribute(`data-ix-${ANIMATION_ID}-direction`)?.toLowerCase());
     if (direction !== "upcoming" && direction !== "past") direction = "upcoming";
     const container = entries[0].item.parentElement;
-    entries.forEach(({ item }) => {
+    allCardItems(wrap).forEach((item) => {
       item.style.display = "none";
+      watchAndKeepHidden(item);
     });
+    watchForLateItems(container);
     const { loadMoreWrap, loadMoreBtn } = resolveLoadMore(wrap);
     const loadMoreTarget = loadMoreWrap || loadMoreBtn;
     const dividerTemplate = wrap.querySelector(FEED_DIVIDER_EL);
@@ -784,8 +807,13 @@
   function needsSharedData(wrap) {
     return [...wrap.querySelectorAll(ITEM2)].some((item) => item.querySelector(CARD_EL) && !item.querySelector(DATA_EL2));
   }
+  function allCardItems(wrap) {
+    return [...wrap.querySelectorAll(ITEM2)].filter(
+      (item) => item.querySelector(CARD_EL) && !item.hasAttribute(CLONE_ATTR)
+    );
+  }
   function buildEntries(wrap, eventsBySlug) {
-    const cardItems = [...wrap.querySelectorAll(ITEM2)].filter((item) => item.querySelector(CARD_EL));
+    const cardItems = allCardItems(wrap);
     if (cardItems.length === 0) return [];
     return cardItems.map((item) => {
       const dataEl = item.querySelector(DATA_EL2);
@@ -808,7 +836,11 @@
           return null;
         }
       }
-      return event.startDate ? { item, event } : null;
+      if (!event.startDate) {
+        console.warn("event-list: event JSON has no valid Start Date \u2014 this card will never be shown.", item);
+        return null;
+      }
+      return { item, event };
     }).filter(Boolean);
   }
   function readItemCount(wrap, defaultValue) {
@@ -849,7 +881,7 @@
           callback(null);
           return;
         }
-        Promise.resolve(listInstance.loadingPaginatedItems).then(() => callback(listInstance));
+        Promise.resolve(listInstance.loadingPaginatedItems).then(() => waitForDomSettle(list)).then(() => callback(listInstance));
       }
     ]);
   }
@@ -868,19 +900,67 @@
     });
     observer.observe(el, { attributes: true, attributeFilter: ["style"] });
   }
+  function watchAndKeepHidden(el) {
+    const observer = new MutationObserver(() => {
+      if (el.style.display !== "none") el.style.display = "none";
+    });
+    observer.observe(el, { attributes: true, attributeFilter: ["style"] });
+  }
+  function waitForDomSettle(container, quietMs = 150, maxWaitMs = 4e3) {
+    return new Promise((resolve) => {
+      let settled = false;
+      let quietTimer;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        observer.disconnect();
+        clearTimeout(quietTimer);
+        clearTimeout(maxTimer);
+        resolve();
+      };
+      const observer = new MutationObserver(() => {
+        clearTimeout(quietTimer);
+        quietTimer = setTimeout(finish, quietMs);
+      });
+      observer.observe(container, { childList: true });
+      quietTimer = setTimeout(finish, quietMs);
+      const maxTimer = setTimeout(finish, maxWaitMs);
+    });
+  }
+  function watchForLateItems(container) {
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        mutation.addedNodes.forEach((node) => {
+          if (node.nodeType !== 1) return;
+          if (!node.matches?.(ITEM2)) return;
+          if (node.hasAttribute(CLONE_ATTR)) return;
+          if (!node.querySelector(CARD_EL)) return;
+          node.style.display = "none";
+          watchAndKeepHidden(node);
+        });
+      });
+    });
+    observer.observe(container, { childList: true });
+  }
 
   // src/event-detail.js
   var ANIMATION_ID2 = "events";
   var DETAIL_LAYOUT = "detail";
   var WRAP3 = '[data-ix-events="wrap"]';
   var DATA_EL3 = '[data-ix-events="data"]';
-  var NEXT_OCCURRENCE_EL = '[data-ix-events="next-occurrence"]';
-  var OCCURRENCE_LIST = '[data-ix-events="occurrence-list"]';
-  var OCCURRENCE_ITEM = '[data-ix-events="occurrence-item"]';
+  var NEXT_DATE_EL = '[data-ix-events="next-date"]';
+  var DATES_LIST = '[data-ix-events="dates-list"]';
+  var DATES_ITEM = '[data-ix-events="dates-item"]';
   var DATE_EL2 = '[data-ix-events="date"]';
   var LOAD_MORE_WRAP2 = '[data-ix-events="load-more-wrap"]';
   var LOAD_MORE_BTN2 = '[data-ix-events="load-more"]';
+  var INITIALIZED_ATTR2 = "data-ix-events-initialized";
   var ALL_RANGE_YEARS = 3;
+  function claimForInit2(wrap) {
+    if (wrap.hasAttribute(INITIALIZED_ATTR2)) return false;
+    wrap.setAttribute(INITIALIZED_ATTR2, "");
+    return true;
+  }
   function queryOwn(scope, selector, boundarySelector = WRAP3) {
     return [...scope.querySelectorAll(selector)].find((el) => el.closest(boundarySelector) === scope) || null;
   }
@@ -901,10 +981,14 @@
     debugLog('[event-detail] wraps with layout="detail" found:', wraps.length, wraps);
     if (wraps.length === 0) return;
     wraps.forEach((wrap) => {
+      if (!claimForInit2(wrap)) {
+        debugLog("[event-detail] wrap already initialized, skipping:", wrap);
+        return;
+      }
       const event = parseWrapEvent(wrap);
       if (!event) return;
       renderNextOccurrence(wrap, event);
-      queryOwnAll(wrap, OCCURRENCE_LIST).forEach((listEl, i) => initOccurrenceList(listEl, event, i));
+      queryOwnAll(wrap, DATES_LIST).forEach((listEl, i) => initDatesList(listEl, event, i));
     });
   };
   function parseWrapEvent(wrap) {
@@ -942,7 +1026,7 @@
     return results[0] || null;
   }
   function renderNextOccurrence(wrap, event) {
-    const el = queryOwn(wrap, NEXT_OCCURRENCE_EL);
+    const el = queryOwn(wrap, NEXT_DATE_EL);
     if (!el) return;
     const occurrence = findNextOccurrence(event);
     debugLog("[event-detail] next occurrence for", event.name, ":", occurrence);
@@ -962,18 +1046,18 @@
     const rangeEnd = event.recurringEndDate && event.recurringEndDate < cappedEnd ? event.recurringEndDate : cappedEnd;
     return getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
   }
-  function initOccurrenceList(listEl, event, listIndex) {
-    const template = queryOwn(listEl, OCCURRENCE_ITEM, OCCURRENCE_LIST);
+  function initDatesList(listEl, event, listIndex) {
+    const template = queryOwnAll(listEl, DATES_ITEM, DATES_LIST).find((el) => !el.hasAttribute(CLONE_ATTR)) || null;
     if (!template) return;
-    let filter = attr("upcoming", listEl.getAttribute(`data-ix-${ANIMATION_ID2}-detail-filter`)?.toLowerCase());
+    let filter = attr("upcoming", listEl.getAttribute(`data-ix-${ANIMATION_ID2}-dates-filter`)?.toLowerCase());
     if (filter !== "upcoming" && filter !== "past" && filter !== "all") filter = "upcoming";
     const itemCount = readItemCount(listEl, 12);
     const container = template.parentElement;
     template.style.display = "none";
-    const loadMoreWrap = queryOwn(listEl, LOAD_MORE_WRAP2, OCCURRENCE_LIST);
-    const loadMoreBtn = queryOwn(loadMoreWrap || listEl, LOAD_MORE_BTN2, OCCURRENCE_LIST);
+    const loadMoreWrap = queryOwn(listEl, LOAD_MORE_WRAP2, DATES_LIST);
+    const loadMoreBtn = queryOwn(loadMoreWrap || listEl, LOAD_MORE_BTN2, DATES_LIST);
     const loadMoreTarget = loadMoreWrap || loadMoreBtn;
-    debugLog("[event-detail] initOccurrenceList: filter =", filter, "| itemCount =", itemCount, "| loadMoreBtn found:", !!loadMoreBtn);
+    debugLog("[event-detail] initDatesList: filter =", filter, "| itemCount =", itemCount, "| loadMoreBtn found:", !!loadMoreBtn);
     const allOccurrences = filter === "all" ? buildAllOccurrences(event) : null;
     let renderedCount = 0;
     function searchDirected(targetCount) {
@@ -1039,6 +1123,12 @@
   var SLUG_ATTR2 = "data-ix-events-slug";
   var DISABLED_CLASS2 = "is-disabled";
   var HIDDEN_CLASS = "u-display-none";
+  var INITIALIZED_ATTR3 = "data-ix-events-initialized";
+  function claimForInit3(wrap) {
+    if (wrap.hasAttribute(INITIALIZED_ATTR3)) return false;
+    wrap.setAttribute(INITIALIZED_ATTR3, "");
+    return true;
+  }
   var PILL_TEXT_FIELDS = {
     name: (event) => event.name,
     slug: (event) => event.slug,
@@ -1062,7 +1152,13 @@
     );
     debugLog('[calendar] wraps with layout="calendar" found:', wraps.length, wraps);
     if (wraps.length === 0) return;
-    wraps.forEach((wrap) => initCalendar(wrap));
+    wraps.forEach((wrap) => {
+      if (!claimForInit3(wrap)) {
+        debugLog("[calendar] wrap already initialized, skipping:", wrap);
+        return;
+      }
+      initCalendar(wrap);
+    });
   };
   function initCalendar(wrap) {
     const grid = wrap.querySelector(GRID);
@@ -1468,6 +1564,11 @@
     }
     return segments;
   }
+  function sameDayPriority(seg) {
+    if (seg.endIndex > seg.startIndex) return 0;
+    if (!seg.event.showStartTime) return 1;
+    return 2;
+  }
   function assignLanes(segments) {
     const byRow = /* @__PURE__ */ new Map();
     segments.forEach((seg) => {
@@ -1476,7 +1577,14 @@
       byRow.get(row).push(seg);
     });
     byRow.forEach((rowSegments) => {
-      rowSegments.sort((a, b) => a.startIndex - b.startIndex || b.endIndex - b.startIndex - (a.endIndex - a.startIndex));
+      rowSegments.sort((a, b) => {
+        if (a.startIndex !== b.startIndex) return a.startIndex - b.startIndex;
+        const priorityDiff = sameDayPriority(a) - sameDayPriority(b);
+        if (priorityDiff !== 0) return priorityDiff;
+        if (sameDayPriority(a) === 0) return b.endIndex - b.startIndex - (a.endIndex - a.startIndex);
+        if (sameDayPriority(a) === 2) return a.occurrence.start - b.occurrence.start;
+        return 0;
+      });
       const laneEnds = [];
       rowSegments.forEach((seg) => {
         let lane = laneEnds.findIndex((end) => end < seg.startIndex);

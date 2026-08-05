@@ -1,7 +1,7 @@
 import { attr, uniquifyIds, debugLog } from './utilities';
 import { getOccurrences, parseEventFromJSON } from './recurrence';
 import { expandingWindowSearch, SEARCH_CAP, setDateFields, applyDateFormat } from './date-utils';
-import { createOccurrenceCard, readItemCount } from './event-list';
+import { createOccurrenceCard, readItemCount, CLONE_ATTR } from './event-list';
 
 // ============================================================================
 // event-detail: single-event CMS template page (data-ix-events-layout="detail")
@@ -17,10 +17,10 @@ import { createOccurrenceCard, readItemCount } from './event-list';
 // Safe to nest another instance's wrap inside this one — e.g. an "Other
 // Upcoming Events" Feed section on the same template page. Every lookup
 // below (queryOwn()) only matches elements whose NEAREST ancestor of the
-// relevant kind (wrap, or occurrence-list — see below) is the container
-// actually being searched, so a nested Feed's own elements — or a different
-// occurrence-list's own template/load-more — are never mistaken for this
-// one's own.
+// relevant kind (wrap, or dates-list — see below) is the container actually
+// being searched, so a nested Feed's own elements — or a different
+// dates-list's own template/load-more — are never mistaken for this one's
+// own.
 //
 // Required structure per instance:
 //   [data-ix-events="wrap"] [data-ix-events-layout="detail"]   component root
@@ -28,7 +28,7 @@ import { createOccurrenceCard, readItemCount } from './event-list';
 //                                 page's own event fields, same shape as
 //                                 every other view's hidden JSON embed (see
 //                                 README.md).
-//     [data-ix-events="next-occurrence"]   optional — the next upcoming
+//     [data-ix-events="next-date"]   optional — the next upcoming
 //                                 occurrence's date. Non-recurring events
 //                                 always use their own Start/End Date (even
 //                                 if in the past — there's no other sensible
@@ -44,7 +44,7 @@ import { createOccurrenceCard, readItemCount } from './event-list';
 //                                 date text; when a nested date child exists,
 //                                 that's what gets updated instead of this
 //                                 element's own text.
-//     [data-ix-events="occurrence-list"]   optional, repeatable — a wrapper
+//     [data-ix-events="dates-list"]   optional, repeatable — a wrapper
 //                                 that both holds this list's own options
 //                                 (below) and is what clones get appended
 //                                 into. A page can have more than one, e.g. a
@@ -54,13 +54,13 @@ import { createOccurrenceCard, readItemCount } from './event-list';
 //                                 specific list has zero occurrences on
 //                                 init — e.g. an "upcoming" list for an event
 //                                 whose recurring series has already ended.
-//       [data-ix-events="occurrence-item"]   template row for one occurrence.
+//       [data-ix-events="dates-item"]   template row for one occurrence.
 //                                 Hidden after init; clones are appended
-//                                 into occurrence-list, after this element.
+//                                 into dates-list, after this element.
 //                                 Put data-ix-events-date-format directly on
 //                                 this element and its own text updates —
 //                                 same "one attribute is enough" fallback as
-//                                 next-occurrence — OR nest a separate
+//                                 next-date — OR nest a separate
 //                                 [data-ix-events="date"] child instead if
 //                                 you need other markup alongside the date.
 //         [data-ix-events="date"]    same date-format contract.
@@ -68,9 +68,9 @@ import { createOccurrenceCard, readItemCount } from './event-list';
 //         [data-ix-events="load-more"]        optional — button, reveals the
 //                                 next batch of this list's occurrences.
 //
-// Options (read from each occurrence-list element, NOT the wrap — a page can
-// have several occurrence-lists, each with its own settings):
-//   data-ix-events-detail-filter="upcoming" (default) | "past" | "all"
+// Options (read from each dates-list element, NOT the wrap — a page can have
+// several dates-lists, each with its own settings):
+//   data-ix-events-dates-filter="upcoming" (default) | "past" | "all"
 //     upcoming — occurrences on/after today, soonest first.
 //     past — occurrences that have already ended, most recent first.
 //     all — the event's full occurrence history, oldest to newest, in one
@@ -87,21 +87,37 @@ const DETAIL_LAYOUT = 'detail';
 
 const WRAP = '[data-ix-events="wrap"]';
 const DATA_EL = '[data-ix-events="data"]';
-const NEXT_OCCURRENCE_EL = '[data-ix-events="next-occurrence"]';
-const OCCURRENCE_LIST = '[data-ix-events="occurrence-list"]';
-const OCCURRENCE_ITEM = '[data-ix-events="occurrence-item"]';
+const NEXT_DATE_EL = '[data-ix-events="next-date"]';
+const DATES_LIST = '[data-ix-events="dates-list"]';
+const DATES_ITEM = '[data-ix-events="dates-item"]';
 const DATE_EL = '[data-ix-events="date"]';
 const LOAD_MORE_WRAP = '[data-ix-events="load-more-wrap"]';
 const LOAD_MORE_BTN = '[data-ix-events="load-more"]';
+const INITIALIZED_ATTR = 'data-ix-events-initialized';
 
 const ALL_RANGE_YEARS = 3; // matches Feed View's existing forward-search safety margin
+
+// Marks `wrap` as processed and returns true the FIRST time it's called for
+// a given wrap, false every time after — guards against a wrap getting
+// initialized twice (e.g. a page-transition script re-running this bundle
+// on soft navigation, without a full page reload). Without this, a second
+// pass's dates-item lookup could grab a clone left over from the first pass
+// instead of the real template (see the CLONE_ATTR filter below), and each
+// dates-list would independently append a whole extra batch on top of the
+// first pass's, since renderedCount starts fresh at 0 in a new closure with
+// no memory of what already rendered.
+function claimForInit(wrap) {
+  if (wrap.hasAttribute(INITIALIZED_ATTR)) return false;
+  wrap.setAttribute(INITIALIZED_ATTR, '');
+  return true;
+}
 
 // Finds descendant(s) of `scope` matching `selector` whose NEAREST ancestor
 // matching `boundarySelector` is `scope` itself — not a plain
 // scope.querySelector(All), which would recurse into a nested same-kind
 // container's own elements too. Used both for wrap-nesting (a Feed section
-// inside a detail wrap) and list-nesting (one occurrence-list's template/
-// load-more never bleeding into a sibling occurrence-list's).
+// inside a detail wrap) and list-nesting (one dates-list's template/
+// load-more never bleeding into a sibling dates-list's).
 function queryOwn(scope, selector, boundarySelector = WRAP) {
   return [...scope.querySelectorAll(selector)].find((el) => el.closest(boundarySelector) === scope) || null;
 }
@@ -112,7 +128,7 @@ function queryOwnAll(scope, selector, boundarySelector = WRAP) {
 // Applies date-format text to a nested [data-ix-events="date"] child if one
 // exists, otherwise to `el` itself (reading data-ix-events-date-format
 // directly off it) — the "one attribute is enough" fallback shared by both
-// next-occurrence and each occurrence-item clone below.
+// next-date and each dates-item clone below.
 function applyOwnOrNestedDate(el, occurrence, event) {
   if (el.querySelector(DATE_EL)) {
     setDateFields(el, occurrence, event);
@@ -129,10 +145,14 @@ export const eventDetail = function () {
   if (wraps.length === 0) return;
 
   wraps.forEach((wrap) => {
+    if (!claimForInit(wrap)) {
+      debugLog('[event-detail] wrap already initialized, skipping:', wrap);
+      return;
+    }
     const event = parseWrapEvent(wrap);
     if (!event) return;
     renderNextOccurrence(wrap, event);
-    queryOwnAll(wrap, OCCURRENCE_LIST).forEach((listEl, i) => initOccurrenceList(listEl, event, i));
+    queryOwnAll(wrap, DATES_LIST).forEach((listEl, i) => initDatesList(listEl, event, i));
   });
 };
 
@@ -179,7 +199,7 @@ export function findNextOccurrence(event) {
 }
 
 function renderNextOccurrence(wrap, event) {
-  const el = queryOwn(wrap, NEXT_OCCURRENCE_EL);
+  const el = queryOwn(wrap, NEXT_DATE_EL);
   if (!el) return;
   const occurrence = findNextOccurrence(event);
   debugLog('[event-detail] next occurrence for', event.name, ':', occurrence);
@@ -191,7 +211,7 @@ function renderNextOccurrence(wrap, event) {
   applyOwnOrNestedDate(el, occurrence, event);
 }
 
-// data-ix-events-detail-filter="all" isn't an expanding search — it's one
+// data-ix-events-dates-filter="all" isn't an expanding search — it's one
 // bounded getOccurrences() call, computed once. The past bound is naturally
 // finite (the event's own real Start Date), so only the future bound needs
 // the arbitrary safety cap (recurringEndDate can be unset = indefinite).
@@ -206,22 +226,26 @@ export function buildAllOccurrences(event) {
 }
 
 // listIndex disambiguates clone id/data-w-id suffixes across multiple
-// occurrence-lists on the same page — without it, list A's and list B's
-// first clone would both end up suffixed "detail-0".
-function initOccurrenceList(listEl, event, listIndex) {
-  const template = queryOwn(listEl, OCCURRENCE_ITEM, OCCURRENCE_LIST);
+// dates-lists on the same page — without it, list A's and list B's first
+// clone would both end up suffixed "detail-0".
+function initDatesList(listEl, event, listIndex) {
+  // Excludes CLONE_ATTR-tagged elements — a clone carries the same
+  // dates-item structure as its template, so without this a clone from an
+  // earlier pass could get mistaken for the real template (see
+  // claimForInit()'s header comment).
+  const template = queryOwnAll(listEl, DATES_ITEM, DATES_LIST).find((el) => !el.hasAttribute(CLONE_ATTR)) || null;
   if (!template) return;
 
-  let filter = attr('upcoming', listEl.getAttribute(`data-ix-${ANIMATION_ID}-detail-filter`)?.toLowerCase());
+  let filter = attr('upcoming', listEl.getAttribute(`data-ix-${ANIMATION_ID}-dates-filter`)?.toLowerCase());
   if (filter !== 'upcoming' && filter !== 'past' && filter !== 'all') filter = 'upcoming';
   const itemCount = readItemCount(listEl, 12);
   const container = template.parentElement;
   template.style.display = 'none';
 
-  const loadMoreWrap = queryOwn(listEl, LOAD_MORE_WRAP, OCCURRENCE_LIST);
-  const loadMoreBtn = queryOwn(loadMoreWrap || listEl, LOAD_MORE_BTN, OCCURRENCE_LIST);
+  const loadMoreWrap = queryOwn(listEl, LOAD_MORE_WRAP, DATES_LIST);
+  const loadMoreBtn = queryOwn(loadMoreWrap || listEl, LOAD_MORE_BTN, DATES_LIST);
   const loadMoreTarget = loadMoreWrap || loadMoreBtn;
-  debugLog('[event-detail] initOccurrenceList: filter =', filter, '| itemCount =', itemCount, '| loadMoreBtn found:', !!loadMoreBtn);
+  debugLog('[event-detail] initDatesList: filter =', filter, '| itemCount =', itemCount, '| loadMoreBtn found:', !!loadMoreBtn);
 
   const allOccurrences = filter === 'all' ? buildAllOccurrences(event) : null;
   let renderedCount = 0;
@@ -259,8 +283,8 @@ function initOccurrenceList(listEl, event, listIndex) {
       // createOccurrenceCard() only updates a NESTED [data-ix-events="date"]
       // child (same shared helper List/Feed use, where the card root is
       // never itself a date target) — apply the same self-target fallback
-      // next-occurrence gets, so a bare occurrence-item with no separate
-      // date child still updates its own text.
+      // next-date gets, so a bare dates-item with no separate date child
+      // still updates its own text.
       applyOwnOrNestedDate(clone, occurrence, event);
       container.appendChild(clone);
     });

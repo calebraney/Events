@@ -124,14 +124,19 @@ import { startOfDay, addDays, anchorFor, getRangeBounds, stepCurrent, formatOccu
 // pill's actual text content — is-middle/is-end pieces render as an empty
 // colored bar for visual continuity.
 //
-// Within a row, lanes are assigned purely by start index (then by span
-// length descending as a same-start tiebreaker only — see assignLanes) —
-// NOT by multi-day-ness. A segment reuses the lowest lane whose previous
-// occupant has already ended, regardless of whether either segment is
-// multi-day, so two genuinely non-overlapping events (a single-day one on
-// one day, a multi-day one starting later and never touching that day)
-// naturally end up sharing lane 0 instead of one being pushed into a higher
-// lane — and needing a spacer — for no real reason.
+// Within a row, lanes are assigned by start index first (segments starting
+// earlier in the row get first pick of the lowest lane). For segments that
+// share the same start day, priority is: 1) multi-day segments before
+// single-day ones (longer-span-first among ties within that group), then
+// 2) single-day occurrences with no visible start time (Show Start Time
+// off) before ones that show a time, then 3) among the remaining timed
+// single-day occurrences, earliest start time first — see assignLanes'
+// sameDayPriority(). A segment still reuses the lowest lane whose previous
+// occupant has already ended regardless of any of this, so two genuinely
+// non-overlapping events (a single-day one on one day, a multi-day one
+// starting later and never touching that day) naturally end up sharing
+// lane 0 instead of one being pushed into a higher lane — and needing a
+// spacer — for no real reason.
 //
 // Vertical lane alignment across a row (so a bar reads as one straight band)
 // depends on every pill/spacer sharing the same fixed height (--pill-height
@@ -166,6 +171,18 @@ const FS_LIST_SELECTOR = '[fs-list-element="list"]';
 const SLUG_ATTR = 'data-ix-events-slug';
 const DISABLED_CLASS = 'is-disabled';
 const HIDDEN_CLASS = 'u-display-none';
+const INITIALIZED_ATTR = 'data-ix-events-initialized';
+
+// Guards against initCalendar() running twice for the same wrap (e.g. a
+// page-transition script re-running this bundle on soft navigation) —
+// otherwise nav button listeners, the hover-card MutationObserver, etc.
+// would all get bound a second time. Same pattern as event-list.js's and
+// event-detail.js's claimForInit().
+function claimForInit(wrap) {
+  if (wrap.hasAttribute(INITIALIZED_ATTR)) return false;
+  wrap.setAttribute(INITIALIZED_ATTR, '');
+  return true;
+}
 
 // Every plain-text field a pill can bind, kebab-case attribute name ->
 // reader off the parsed `event` object (see parseEventFromJSON in
@@ -201,7 +218,13 @@ export const calendar = function () {
   debugLog('[calendar] wraps with layout="calendar" found:', wraps.length, wraps);
   if (wraps.length === 0) return;
 
-  wraps.forEach((wrap) => initCalendar(wrap));
+  wraps.forEach((wrap) => {
+    if (!claimForInit(wrap)) {
+      debugLog('[calendar] wrap already initialized, skipping:', wrap);
+      return;
+    }
+    initCalendar(wrap);
+  });
 };
 
 function initCalendar(wrap) {
@@ -853,24 +876,32 @@ function splitIntoSegments(startIndex, endIndex) {
 // Greedy lane assignment within each week-row so overlapping segments stack
 // into separate lanes instead of colliding, while non-overlapping segments
 // share a lane whenever possible. Mutates each segment with `.lane`. Sorted
-// by start index first, then by span length descending as a tiebreaker only
-// (so when two segments genuinely start on the same day, the longer one
-// gets first pick of the lowest lane) — deliberately NOT sorted by
-// multi-day-ness first. An earlier revision prioritized multi-day segments
-// into the lowest lanes unconditionally, regardless of start order, so
-// they'd always render at the top of the stack — but that meant a
-// single-day event with no real overlap could still get displaced out of
-// lane 0 by a multi-day event elsewhere in the same row that starts later
-// and never even touches that day, forcing an unnecessary
-// [data-ix-events="calendar-pill-spacer"] above it purely for alignment
-// with a lane it has nothing to do with (a real reported bug — visible as
-// extra blank space above a pill for no apparent reason). Plain
-// start-then-span-length sorting doesn't have that failure mode: the
-// greedy reuse check below (`laneEnds[lane] < seg.startIndex`) already
-// lets a later, non-overlapping segment reuse an earlier one's lane
-// correctly regardless of which one is multi-day, and a multi-day segment
-// that DOES overlap an earlier single-day one still naturally lands in a
-// higher lane only where that's actually necessary — never elsewhere.
+// by start index first (unchanged — this is what an earlier revision got
+// wrong: prioritizing multi-day segments into the lowest lanes
+// UNCONDITIONALLY, regardless of start order, meant a single-day event with
+// no real overlap could get displaced out of lane 0 by a multi-day event
+// elsewhere in the row that starts later and never even touches that day,
+// forcing an unnecessary [data-ix-events="calendar-pill-spacer"] above it
+// purely for alignment with a lane it has nothing to do with — a real
+// reported bug, visible as extra blank space above a pill for no apparent
+// reason). The greedy reuse check below (`laneEnds[lane] < seg.startIndex`)
+// already lets a later, non-overlapping segment reuse an earlier one's lane
+// correctly regardless of which one is multi-day.
+//
+// For segments that share the same start day, sameDayPriority() breaks the
+// tie in three tiers (confirmed with Caleb): 1) multi-day before single-day
+// (longer-span-first among multi-day ties — the prior tiebreak, preserved
+// for that narrower case), 2) among single-day segments, ones with no
+// visible start time (Show Start Time off) before ones that show a time,
+// 3) among the remaining timed single-day segments, earliest start time
+// first. This is deliberately scoped to same-start-day ties only — it does
+// NOT resurrect the reverted whole-row multi-day-first behavior above.
+function sameDayPriority(seg) {
+  if (seg.endIndex > seg.startIndex) return 0; // multi-day
+  if (!seg.event.showStartTime) return 1; // single-day, no visible time
+  return 2; // single-day, timed
+}
+
 function assignLanes(segments) {
   const byRow = new Map();
   segments.forEach((seg) => {
@@ -879,7 +910,14 @@ function assignLanes(segments) {
     byRow.get(row).push(seg);
   });
   byRow.forEach((rowSegments) => {
-    rowSegments.sort((a, b) => a.startIndex - b.startIndex || b.endIndex - b.startIndex - (a.endIndex - a.startIndex));
+    rowSegments.sort((a, b) => {
+      if (a.startIndex !== b.startIndex) return a.startIndex - b.startIndex;
+      const priorityDiff = sameDayPriority(a) - sameDayPriority(b);
+      if (priorityDiff !== 0) return priorityDiff;
+      if (sameDayPriority(a) === 0) return b.endIndex - b.startIndex - (a.endIndex - a.startIndex);
+      if (sameDayPriority(a) === 2) return a.occurrence.start - b.occurrence.start;
+      return 0;
+    });
     const laneEnds = [];
     rowSegments.forEach((seg) => {
       let lane = laneEnds.findIndex((end) => end < seg.startIndex);
