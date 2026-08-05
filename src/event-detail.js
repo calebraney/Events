@@ -1,4 +1,4 @@
-import { attr, uniquifyIds, debugLog } from './utilities';
+import { attr, uniquifyIds, debugLog, announceLiveRegion } from './utilities';
 import { getOccurrences, parseEventFromJSON } from './recurrence';
 import { expandingWindowSearch, SEARCH_CAP, setDateFields, applyDateFormat } from './date-utils';
 import { createOccurrenceCard, readItemCount, CLONE_ATTR } from './event-list';
@@ -70,16 +70,26 @@ import { createOccurrenceCard, readItemCount, CLONE_ATTR } from './event-list';
 //
 // Options (read from each dates-list element, NOT the wrap — a page can have
 // several dates-lists, each with its own settings):
-//   data-ix-events-dates-filter="upcoming" (default) | "past" | "all"
-//     upcoming — occurrences on/after today, soonest first.
-//     past — occurrences that have already ended, most recent first.
-//     all — the event's full occurrence history, oldest to newest, in one
-//     continuous list. Bounded to +/- 3 years from today (or the event's own
-//     Start Date / Recurring End Date if those are narrower) — a truly
-//     unbounded recurring series has no literal "all."
+//   data-ix-events-filter="upcoming" (default) | "past" | "all"
+//     WHICH occurrences are candidates — independent of display order (see
+//     data-ix-events-sort below). upcoming — only occurrences on/after
+//     today. past — only occurrences that have already ended. all — no
+//     time-based filtering, bounded to +/- 3 years from today (or the
+//     event's own Start Date / Recurring End Date if those are narrower) —
+//     a truly unbounded recurring series has no literal "all."
+//   data-ix-events-sort="earliest-first" | "latest-first"
+//     display order, independent of filter — unset (default) is contextual:
+//     latest-first when filter="past", earliest-first otherwise. Set
+//     explicitly to override, e.g. filter="all" + sort="latest-first" for
+//     the full history newest-first instead of oldest-first.
 //   data-ix-events-item-count="12" (default)
 //     how many occurrence rows to reveal on init and per "Load More" click.
 //     Same name/meaning as List View and Feed View's option.
+//
+// Renamed from data-ix-events-dates-filter, and split into two independent
+// options (filter + sort) — existing instances need updating. Shares this
+// filter/sort split with Feed View (event-list.js) — see that file's header
+// comment for the "why split" rationale.
 // ============================================================================
 
 const ANIMATION_ID = 'events';
@@ -211,18 +221,21 @@ function renderNextOccurrence(wrap, event) {
   applyOwnOrNestedDate(el, occurrence, event);
 }
 
-// data-ix-events-dates-filter="all" isn't an expanding search — it's one
-// bounded getOccurrences() call, computed once. The past bound is naturally
-// finite (the event's own real Start Date), so only the future bound needs
-// the arbitrary safety cap (recurringEndDate can be unset = indefinite).
-export function buildAllOccurrences(event) {
+// data-ix-events-filter="all" isn't an expanding search — it's one bounded
+// getOccurrences() call, computed once. The past bound is naturally finite
+// (the event's own real Start Date), so only the future bound needs the
+// arbitrary safety cap (recurringEndDate can be unset = indefinite).
+// sortDirection ("earliest-first" default | "latest-first") is independent
+// of filter — see initDatesList's header comment.
+export function buildAllOccurrences(event, sortDirection = 'earliest-first') {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const earliestAllowed = new Date(today.getFullYear() - ALL_RANGE_YEARS, today.getMonth(), today.getDate());
   const rangeStart = event.startDate > earliestAllowed ? event.startDate : earliestAllowed;
   const cappedEnd = new Date(today.getFullYear() + ALL_RANGE_YEARS, today.getMonth(), today.getDate());
   const rangeEnd = event.recurringEndDate && event.recurringEndDate < cappedEnd ? event.recurringEndDate : cappedEnd;
-  return getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
+  const isDescending = sortDirection === 'latest-first';
+  return getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => (isDescending ? b.start - a.start : a.start - b.start));
 }
 
 // listIndex disambiguates clone id/data-w-id suffixes across multiple
@@ -236,8 +249,12 @@ function initDatesList(listEl, event, listIndex) {
   const template = queryOwnAll(listEl, DATES_ITEM, DATES_LIST).find((el) => !el.hasAttribute(CLONE_ATTR)) || null;
   if (!template) return;
 
-  let filter = attr('upcoming', listEl.getAttribute(`data-ix-${ANIMATION_ID}-dates-filter`)?.toLowerCase());
+  let filter = attr('upcoming', listEl.getAttribute(`data-ix-${ANIMATION_ID}-filter`)?.toLowerCase());
   if (filter !== 'upcoming' && filter !== 'past' && filter !== 'all') filter = 'upcoming';
+  let sortDirection = attr('', listEl.getAttribute(`data-ix-${ANIMATION_ID}-sort`)?.toLowerCase());
+  if (sortDirection !== 'earliest-first' && sortDirection !== 'latest-first') sortDirection = undefined;
+  const effectiveSort = sortDirection || (filter === 'past' ? 'latest-first' : 'earliest-first');
+  const isDescending = effectiveSort === 'latest-first';
   const itemCount = readItemCount(listEl, 12);
   const container = template.parentElement;
   template.style.display = 'none';
@@ -245,9 +262,9 @@ function initDatesList(listEl, event, listIndex) {
   const loadMoreWrap = queryOwn(listEl, LOAD_MORE_WRAP, DATES_LIST);
   const loadMoreBtn = queryOwn(loadMoreWrap || listEl, LOAD_MORE_BTN, DATES_LIST);
   const loadMoreTarget = loadMoreWrap || loadMoreBtn;
-  debugLog('[event-detail] initDatesList: filter =', filter, '| itemCount =', itemCount, '| loadMoreBtn found:', !!loadMoreBtn);
+  debugLog('[event-detail] initDatesList: filter =', filter, '| sort =', effectiveSort, '| itemCount =', itemCount, '| loadMoreBtn found:', !!loadMoreBtn);
 
-  const allOccurrences = filter === 'all' ? buildAllOccurrences(event) : null;
+  const allOccurrences = filter === 'all' ? buildAllOccurrences(event, effectiveSort) : null;
   let renderedCount = 0;
 
   function searchDirected(targetCount) {
@@ -263,7 +280,7 @@ function initDatesList(listEl, event, listIndex) {
         const occurrences = getOccurrences(event, start, end).filter((occ) =>
           filter === 'past' ? occ.end < now : occ.end >= now
         );
-        occurrences.sort((a, b) => (filter === 'past' ? b.start - a.start : a.start - b.start));
+        occurrences.sort((a, b) => (isDescending ? b.start - a.start : a.start - b.start));
         return occurrences;
       },
     });
@@ -297,5 +314,10 @@ function initDatesList(listEl, event, listIndex) {
   // click returning an empty batch just means "no more," already handled
   // above by hiding loadMoreTarget, not a reason to hide the whole list.
   if (renderedCount === 0) listEl.style.display = 'none';
-  loadMoreBtn?.addEventListener('click', loadMore);
+  loadMoreBtn?.addEventListener('click', () => {
+    const before = renderedCount;
+    loadMore();
+    const added = renderedCount - before;
+    if (added > 0) announceLiveRegion(listEl, `${added} more date${added === 1 ? '' : 's'} loaded.`);
+  });
 }

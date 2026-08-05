@@ -1,4 +1,4 @@
-import { attr, uniquifyIds, debugLog } from './utilities';
+import { attr, uniquifyIds, debugLog, setDisabledState } from './utilities';
 import { getOccurrences } from './recurrence';
 import { whenEvents } from './event-data';
 import { startOfDay, addDays, anchorFor, getRangeBounds, stepCurrent, formatOccurrenceDate, formatWeekLabel, setDateFields } from './date-utils';
@@ -169,7 +169,6 @@ const DEMO_NOTE = '[data-ix-events="demo-note"]';
 const HOVER_CARD = '[data-ix-events="hover-card"]';
 const FS_LIST_SELECTOR = '[fs-list-element="list"]';
 const SLUG_ATTR = 'data-ix-events-slug';
-const DISABLED_CLASS = 'is-disabled';
 const HIDDEN_CLASS = 'u-display-none';
 const INITIALIZED_ATTR = 'data-ix-events-initialized';
 
@@ -237,6 +236,19 @@ function initCalendar(wrap) {
     return;
   }
 
+  // ARIA grid semantics — entirely JS-set, no Designer/HTML changes needed.
+  // day-cells carry aria-rowindex/aria-colindex directly (no DOM row-wrapper
+  // element exists — the grid is flat CSS Grid, one row-major list of
+  // cells — this is a valid ARIA 1.2 pattern for exactly that shape, not a
+  // workaround) instead of nesting them under role="row" containers.
+  grid.setAttribute('role', 'grid');
+  grid.setAttribute('aria-label', 'Event calendar');
+  dayCells.forEach((cell, i) => {
+    cell.setAttribute('role', 'gridcell');
+    cell.setAttribute('aria-rowindex', String(Math.floor(i / 7) + 1));
+    cell.setAttribute('aria-colindex', String((i % 7) + 1));
+  });
+
   const months = attr(6, wrap.getAttribute(`data-ix-${ANIMATION_ID}-months`));
   let range = attr('month', wrap.getAttribute(`data-ix-${ANIMATION_ID}-range`)?.toLowerCase());
   if (range !== 'month' && range !== 'week') range = 'month';
@@ -250,6 +262,11 @@ function initCalendar(wrap) {
   const hideInactiveRow = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID}-hide-inactive-row`));
 
   const label = wrap.querySelector(LABEL);
+  // Announces month/week nav changes to screen reader users the instant its
+  // text updates in refresh() — see utilities.js's announceLiveRegion()
+  // header comment for the same pattern used for List/Feed/Detail's Load
+  // More announcements.
+  label?.setAttribute('aria-live', 'polite');
   const prevBtn = wrap.querySelector(PREV_BTN);
   const nextBtn = wrap.querySelector(NEXT_BTN);
   const todayBtn = wrap.querySelector(TODAY_BTN);
@@ -311,9 +328,9 @@ function initCalendar(wrap) {
   const hoverState = { activeCard: null };
 
   function updateNavState() {
-    if (prevBtn) prevBtn.classList.toggle(DISABLED_CLASS, !canGoPrev(current));
-    if (nextBtn) nextBtn.classList.toggle(DISABLED_CLASS, !canGoNext(current));
-    if (todayBtn) todayBtn.classList.toggle(DISABLED_CLASS, isTodayActive(current));
+    setDisabledState(prevBtn, !canGoPrev(current));
+    setDisabledState(nextBtn, !canGoNext(current));
+    setDisabledState(todayBtn, isTodayActive(current));
   }
 
   function refresh() {
@@ -438,10 +455,26 @@ function cssLengthToPx(value) {
 function buildHoverCardMap(wrap, map) {
   wrap.querySelectorAll(HOVER_CARD).forEach((card) => {
     unwrapFromHiddenAncestor(card, wrap);
+    disableCardFocusability(card);
     const slugEl = card.closest(`[${SLUG_ATTR}]`);
     const slug = slugEl?.getAttribute(SLUG_ATTR);
     if (slug) map.set(slug, card);
   });
+}
+
+// The hover card is revealed by focusING ITS PILL, not by tabbing into the
+// card's own content — so nothing inside it (or the card root itself, if a
+// Designer used a focusable tag there) should be its own tab stop. Without
+// this, native Webflow CMS bindings (a link, a "Learn More" button) inside
+// the card would insert extra tab stops between one pill and the next,
+// making keyboard navigation of the calendar as a whole harder to follow.
+// Idempotent — safe to call repeatedly as buildHoverCardMap() re-runs.
+const CARD_FOCUSABLE_SELECTOR = 'a[href], button, input, select, textarea, [tabindex]';
+function disableCardFocusability(card) {
+  const targets = card.matches(CARD_FOCUSABLE_SELECTOR)
+    ? [card, ...card.querySelectorAll(CARD_FOCUSABLE_SELECTOR)]
+    : [...card.querySelectorAll(CARD_FOCUSABLE_SELECTOR)];
+  targets.forEach((el) => el.setAttribute('tabindex', '-1'));
 }
 
 // If the hover-cards live inside a Finsweet-paginated Collection List
@@ -485,12 +518,21 @@ function resolveHoverCards(wrap, map, callback) {
       // directly and pick up anything new the instant it lands, regardless
       // of when or why Finsweet adds it. Only re-fires callback() when a
       // mutation actually grew the map — harmless no-op on any of the many
-      // unrelated mutations a live list can otherwise produce.
-      new MutationObserver(() => {
+      // unrelated mutations a live list can otherwise produce. Disconnects
+      // itself once the list goes quiet for 2s (no growth, no mutations) —
+      // pagination is long done by then, and there's no reason to keep a
+      // subtree observer running on this list for the rest of the page's
+      // lifetime.
+      let quietTimer;
+      const observer = new MutationObserver(() => {
+        clearTimeout(quietTimer);
         const sizeBefore = map.size;
         buildHoverCardMap(wrap, map);
         if (map.size !== sizeBefore) callback();
-      }).observe(list, { childList: true, subtree: true });
+        quietTimer = setTimeout(() => observer.disconnect(), 2000);
+      });
+      observer.observe(list, { childList: true, subtree: true });
+      quietTimer = setTimeout(() => observer.disconnect(), 2000);
     },
   ]);
 }
@@ -680,6 +722,7 @@ function renderGrid({
     if (moreEl) {
       moreEl.textContent = '';
       moreEl.classList.remove('is-active');
+      moreEl.removeAttribute('aria-expanded');
     }
   });
 
@@ -746,7 +789,28 @@ function renderGrid({
     if (!moreEl) return;
     moreEl.textContent = `+${count} more`;
     moreEl.classList.add('is-active');
+    // aria-expanded only applies in "expand" mode — "hide" isn't a real
+    // disclosure control (it never responds to a click) and "show" never
+    // has anything to fold in the first place (day-pill-limit is bypassed
+    // entirely, so overflowCount is always 0 there).
+    if (overflowMode === 'expand') {
+      const row = Math.floor(i / 7);
+      moreEl.setAttribute('aria-expanded', expandedRows.has(row) ? 'true' : 'false');
+    }
   });
+
+  // aria-label per cell, combining the date with how many events actually
+  // touch that day — segmentsByDay[i].length + overflowCount[i] is exactly
+  // the count of distinct events on that day (a day only ever holds one
+  // segment PIECE per event, never more than one, so no double-counting).
+  for (let i = 0; i < cellCount; i++) {
+    const cell = dayCells[i];
+    if (!cell) continue;
+    const eventCount = segmentsByDay[i].length + overflowCount[i];
+    const dateLabel = formatOccurrenceDate(cellDates[i].date, 'dddd, MMMM D, YYYY');
+    const countLabel = eventCount === 0 ? 'no events' : `${eventCount} event${eventCount === 1 ? '' : 's'}`;
+    cell.setAttribute('aria-label', `${dateLabel}, ${countLabel}`);
+  }
 
   const unmatchedSlugs = new Set();
 
@@ -782,27 +846,39 @@ function renderGrid({
       // asynchronously (see resolveHoverCards) when this pill is created; a
       // value baked in here could go stale the moment that population lands.
       if (!hoverCardsBySlug.has(seg.event.slug)) unmatchedSlugs.add(seg.event.slug);
-      pill.addEventListener('mouseenter', () => {
+      // Shared by mouse AND keyboard — a keyboard user tabbing to a pill
+      // (focus) gets the exact same card reveal a mouse user hovering it
+      // does; blur mirrors mouseleave. Focus/blur fire synchronously and
+      // always paired correctly (unlike mouse events, which can be missed
+      // during fast pointer movement — see the mouseleave-vs-focus split
+      // below and the grid-level mouseleave backstop above), so no separate
+      // keyboard backstop is needed the way the mouse path has one.
+      const revealCard = () => {
         const card = hoverCardsBySlug.get(seg.event.slug);
-        debugLog('[calendar] pill mouseenter — event:', seg.event.name, '| slug:', seg.event.slug, '| card found:', !!card);
+        debugLog('[calendar] pill hover/focus — event:', seg.event.name, '| slug:', seg.event.slug, '| card found:', !!card);
         if (!card) return;
         // Force-hide whatever was previously shown first — a defensive
         // guarantee that at most one card is ever visible, even if some
-        // prior mouseleave was missed (e.g. because an earlier positioning
-        // bug let a card overlap and intercept pointer events for another
-        // pill — fixed above, but this stays as cheap insurance regardless).
+        // prior mouseleave/blur was missed (e.g. because an earlier
+        // positioning bug let a card overlap and intercept pointer events
+        // for another pill — fixed above, but this stays as cheap insurance
+        // regardless).
         if (hoverState.activeCard && hoverState.activeCard !== card) {
           hideHoverCard(hoverState.activeCard);
         }
         hoverState.activeCard = card;
         showHoverCard(card, seg.occurrence, seg.event, pill, wrap, hoverState);
-      });
-      pill.addEventListener('mouseleave', () => {
+      };
+      const dismissCard = () => {
         const card = hoverCardsBySlug.get(seg.event.slug);
-        debugLog('[calendar] pill mouseleave — event:', seg.event.name);
+        debugLog('[calendar] pill unhover/blur — event:', seg.event.name);
         hideHoverCard(card);
         if (hoverState.activeCard === card) hoverState.activeCard = null;
-      });
+      };
+      pill.addEventListener('mouseenter', revealCard);
+      pill.addEventListener('mouseleave', dismissCard);
+      pill.addEventListener('focus', revealCard);
+      pill.addEventListener('blur', dismissCard);
       nextLane++;
     });
   });
@@ -945,11 +1021,22 @@ function createPill(pillTemplate, segment, pos, linkFormat, suffix) {
   const { event, occurrence } = segment;
   const clone = pillTemplate.cloneNode(true);
   uniquifyIds(clone, suffix);
-  if (pos === 'start' || pos === 'single') {
+  const hasContent = pos === 'start' || pos === 'single';
+  if (hasContent) {
     setDateFields(clone, occurrence, event);
     Object.entries(PILL_TEXT_FIELDS).forEach(([attrName, getValue]) => {
       setField(clone, `[data-ix-events="${attrName}"]`, getValue(event));
     });
+  } else {
+    // is-middle/is-end pieces carry no text — they're a plain colored
+    // continuation of the bar (see the rendering-model header comment) and
+    // still keep their href so clicking/tapping anywhere along the bar
+    // works, but they'd otherwise be empty, indistinguishable tab stops for
+    // a keyboard user and empty "link" announcements for a screen reader.
+    // Removed from the tab order and the accessibility tree entirely — the
+    // is-start/is-single piece is what both should encounter instead.
+    clone.setAttribute('tabindex', '-1');
+    clone.setAttribute('aria-hidden', 'true');
   }
   clone.href = linkFormat.replace('{slug}', event.slug || '');
   clone.classList.add(`is-${pos}`);

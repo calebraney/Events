@@ -188,7 +188,9 @@ export function parseDynamoDateTime(str) {
   return isNaN(native.getTime()) ? null : native;
 }
 
-const MONTH_NAMES = [
+// Exported so date-utils.js's formatting (MONTH_FULL) reuses the exact same
+// list instead of maintaining a second, independently-hardcoded copy.
+export const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ];

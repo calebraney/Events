@@ -1,4 +1,5 @@
 import { attr } from './utilities';
+import { MONTH_NAMES as MONTH_FULL } from './recurrence';
 
 // ============================================================================
 // date-utils: shared date math + formatting, used by event-list.js (List View,
@@ -12,10 +13,6 @@ const DATE_EL = '[data-ix-events="date"]';
 const DOW_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const DOW_FULL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const MONTH_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const MONTH_FULL = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-];
 
 // ── Range / navigation math ─────────────────────────────────────────────
 
@@ -209,6 +206,30 @@ export function isTimeFormat(format) {
   return upper === 'TIME' || upper === 'TIME-SHORT';
 }
 
+// Short timezone abbreviation (e.g. "PDT") for a given IANA zone string
+// (event.timezone, e.g. "America/Los_Angeles") at a specific occurrence date
+// — the abbreviation depends on whether DST is active on THAT date, not just
+// the zone name, so it can't be a static lookup. Intl.DateTimeFormat throws
+// a RangeError for an invalid/unrecognized IANA identifier, which doubles as
+// the "is this a valid timezone string" check — returns null (no suffix) for
+// anything missing or invalid rather than throwing.
+export function getTimezoneAbbreviation(date, timeZone) {
+  if (!timeZone) return null;
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', { timeZone, timeZoneName: 'short', hour: 'numeric' }).formatToParts(
+      date
+    );
+    return parts.find((p) => p.type === 'timeZoneName')?.value || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function timezoneSuffix(date, timeZone) {
+  const abbr = getTimezoneAbbreviation(date, timeZone);
+  return abbr ? ` ${abbr}` : '';
+}
+
 // "TIME"/"TIME-SHORT": composite formats for a date element that should show
 // only a time, never a date (e.g. a calendar pill, which already lives
 // inside a specific day-cell) — driven by the event's Show Start Time / Show
@@ -218,15 +239,23 @@ export function isTimeFormat(format) {
 // since there's no date fallback to fall back to the way FULLDATE has one.
 //   "TIME"       always keeps ":00"      — "8:00pm", "8:00-9:30pm", "8:00am-5:00pm"
 //   "TIME-SHORT" drops ":00" per side     — "8pm",    "9-10:15pm",   "7:30am-11:20pm"
-// Both apply the same meridiem-collapsing rule as FULLDATE's range.
+// Both apply the same meridiem-collapsing rule as FULLDATE's range. If the
+// event's Timezone field is set to a valid IANA identifier, its short
+// abbreviation for the occurrence's actual date is appended once at the end
+// (e.g. "8-9pm PDT", not "8pm PDT-9pm PDT") — silently omitted if the field
+// is empty or isn't a recognizable timezone. This only ever adds a label; the
+// displayed hour/minute is still the wall-clock time as authored in Webflow,
+// not converted/recalculated against the timezone — see README's Timezone
+// section for why full conversion isn't done.
 export function formatTimeOnly(occurrence, event, short) {
   if (!event.showStartTime) return null;
   const { start, end } = occurrence;
   const formatSide = short ? formatClockTime : (date) => formatOccurrenceDate(date, 'h:mma');
   const startTime = formatSide(start);
-  if (!event.showEndTime || end.getTime() === start.getTime()) return startTime;
+  const tzSuffix = timezoneSuffix(start, event.timezone);
+  if (!event.showEndTime || end.getTime() === start.getTime()) return startTime + tzSuffix;
   const endTime = formatSide(end);
-  return `${hideStartMeridiem(startTime, start, end)}-${endTime}`;
+  return `${hideStartMeridiem(startTime, start, end)}-${endTime}${tzSuffix}`;
 }
 
 function formatSingleDate(date) {

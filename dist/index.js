@@ -17,6 +17,23 @@
     if (!isNaN(attrVal) && defaultValType === "number") return +attrVal;
     return defaultVal;
   };
+  function setDisabledState(el, isDisabled, disabledClass = "is-disabled") {
+    if (!el) return;
+    el.classList.toggle(disabledClass, isDisabled);
+    if (isDisabled) el.setAttribute("aria-disabled", "true");
+    else el.removeAttribute("aria-disabled");
+  }
+  function announceLiveRegion(container, message) {
+    let region = container.querySelector("[data-live-region]");
+    if (!region) {
+      region = document.createElement("div");
+      region.setAttribute("data-live-region", "");
+      region.setAttribute("aria-live", "polite");
+      region.className = "u-sr-only";
+      container.appendChild(region);
+    }
+    region.textContent = message;
+  }
   function uniquifyIds(root, suffix) {
     if (root.hasAttribute("id")) root.id = `${root.id}-${suffix}`;
     root.removeAttribute("data-w-id");
@@ -295,20 +312,6 @@
   var DOW_SHORT = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   var DOW_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
   var MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-  var MONTH_FULL = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December"
-  ];
   function startOfDay2(date) {
     return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
   }
@@ -378,7 +381,7 @@
     const tokens = {
       YYYY: () => String(date.getFullYear()),
       YY: () => String(date.getFullYear()).slice(-2),
-      MMMM: () => MONTH_FULL[date.getMonth()],
+      MMMM: () => MONTH_NAMES[date.getMonth()],
       MMM: () => MONTH_SHORT[date.getMonth()],
       MM: () => pad2(date.getMonth() + 1),
       M: () => String(date.getMonth() + 1),
@@ -428,21 +431,37 @@
     const upper = format.trim().toUpperCase();
     return upper === "TIME" || upper === "TIME-SHORT";
   }
+  function getTimezoneAbbreviation(date, timeZone) {
+    if (!timeZone) return null;
+    try {
+      const parts = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "short", hour: "numeric" }).formatToParts(
+        date
+      );
+      return parts.find((p) => p.type === "timeZoneName")?.value || null;
+    } catch (e) {
+      return null;
+    }
+  }
+  function timezoneSuffix(date, timeZone) {
+    const abbr = getTimezoneAbbreviation(date, timeZone);
+    return abbr ? ` ${abbr}` : "";
+  }
   function formatTimeOnly(occurrence, event, short) {
     if (!event.showStartTime) return null;
     const { start, end } = occurrence;
     const formatSide = short ? formatClockTime : (date) => formatOccurrenceDate(date, "h:mma");
     const startTime = formatSide(start);
-    if (!event.showEndTime || end.getTime() === start.getTime()) return startTime;
+    const tzSuffix = timezoneSuffix(start, event.timezone);
+    if (!event.showEndTime || end.getTime() === start.getTime()) return startTime + tzSuffix;
     const endTime = formatSide(end);
-    return `${hideStartMeridiem(startTime, start, end)}-${endTime}`;
+    return `${hideStartMeridiem(startTime, start, end)}-${endTime}${tzSuffix}`;
   }
   function formatSingleDate(date) {
-    return `${MONTH_FULL[date.getMonth()]} ${ordinal(date.getDate())}`;
+    return `${MONTH_NAMES[date.getMonth()]} ${ordinal(date.getDate())}`;
   }
   function formatDateRange(start, end) {
     const sameMonth = start.getMonth() === end.getMonth() && start.getFullYear() === end.getFullYear();
-    if (sameMonth) return `${MONTH_FULL[start.getMonth()]} ${start.getDate()}-${ordinal(end.getDate())}`;
+    if (sameMonth) return `${MONTH_NAMES[start.getMonth()]} ${start.getDate()}-${ordinal(end.getDate())}`;
     return `${formatSingleDate(start)} - ${formatSingleDate(end)}`;
   }
   function formatClockTime(date) {
@@ -473,6 +492,7 @@
   var LIST_LAYOUT = "list";
   var FEED_LAYOUT = "feed";
   var WRAP2 = '[data-ix-events="wrap"]';
+  var LIST_EL = '[data-ix-events="list"]';
   var PREV_BTN = '[data-ix-events="prev"]';
   var NEXT_BTN = '[data-ix-events="next"]';
   var TODAY_BTN = '[data-ix-events="today"]';
@@ -482,13 +502,14 @@
   var CARD_EL = '[data-ix-events="card"]';
   var SLUG_ATTR = "data-ix-events-slug";
   var CLONE_ATTR = "data-ix-events-clone";
-  var DISABLED_CLASS = "is-disabled";
   var FS_LIST_SELECTOR = '[fs-list-element="list"]';
   var LOAD_MORE_WRAP = '[data-ix-events="load-more-wrap"]';
   var LOAD_MORE_BTN = '[data-ix-events="load-more"]';
   var FEED_DIVIDER_EL = '[data-ix-events="feed-divider"]';
   var FEED_DIVIDER_TEXT_EL = '[data-ix-events="feed-divider-text"]';
   var INITIALIZED_ATTR = "data-ix-events-initialized";
+  var ALL_RANGE_YEARS = 3;
+  var LIST_DEFAULT_ITEM_COUNT = 30;
   function claimForInit(wrap) {
     if (wrap.hasAttribute(INITIALIZED_ATTR)) return false;
     wrap.setAttribute(INITIALIZED_ATTR, "");
@@ -533,13 +554,14 @@
     const prevBtn = wrap.querySelector(PREV_BTN);
     const nextBtn = wrap.querySelector(NEXT_BTN);
     const todayBtn = wrap.querySelector(TODAY_BTN);
-    const itemCount = readItemCount(wrap, null);
+    const itemCount = readItemCount(wrap, LIST_DEFAULT_ITEM_COUNT);
     const { loadMoreWrap, loadMoreBtn } = itemCount ? resolveLoadMore(wrap) : {};
     debugLog("[event-list] buildListConfig: duplicateRecurring =", duplicateRecurring, "| hidePastEvents =", hidePastEvents, "| range =", range, "| weekStartDay =", weekStartDay, "| itemCount =", itemCount, "| label found:", !!label, "| prevBtn found:", !!prevBtn, "| nextBtn found:", !!nextBtn, "| todayBtn found:", !!todayBtn);
     const entries = buildEntries(wrap, eventsBySlug);
     debugLog("[event-list] buildListConfig: successfully paired entries:", entries.length, entries);
     if (entries.length === 0) return null;
     return {
+      wrap,
       duplicateRecurring,
       hidePastEvents,
       range,
@@ -557,6 +579,7 @@
   }
   function initList(config, listInstance) {
     const {
+      wrap,
       duplicateRecurring,
       hidePastEvents,
       range,
@@ -573,8 +596,10 @@
     } = config;
     const eventByElement = new Map(entries.map(({ item, event }) => [item, event]));
     debugLog("[event-list] initList: registering hook, listInstance =", listInstance);
+    label?.setAttribute("aria-live", "polite");
     let current = anchorFor(/* @__PURE__ */ new Date(), range, weekStartDay);
     let renderedCount = itemCount || 0;
+    let lastVisibleCount = 0;
     listInstance.addHook("filter", (items) => {
       const { start: rangeStart, end: rangeEnd } = getRangeBounds(current, range);
       debugLog("[event-list] filter hook FIRED. items received from Finsweet:", items.length, items, "| active range:", rangeStart, "-", rangeEnd);
@@ -603,6 +628,7 @@
       const total = pending.length;
       const visibleCount = itemCount ? Math.min(renderedCount, total) : total;
       const visible = pending.slice(0, visibleCount);
+      lastVisibleCount = visibleCount;
       items.forEach((listItem) => {
         listItem.element.style.display = "none";
       });
@@ -642,8 +668,8 @@
       listInstance.triggerHook("filter");
     };
     const updateNavState = () => {
-      if (prevBtn) prevBtn.classList.toggle(DISABLED_CLASS, isPrevDisabled(current, range, hidePastEvents));
-      if (todayBtn) todayBtn.classList.toggle(DISABLED_CLASS, isTodayDisabled(current, range));
+      setDisabledState(prevBtn, isPrevDisabled(current, range, hidePastEvents));
+      setDisabledState(todayBtn, isTodayDisabled(current, range));
     };
     refresh();
     prevBtn?.addEventListener("click", () => {
@@ -661,8 +687,11 @@
       refresh();
     });
     loadMoreBtn?.addEventListener("click", () => {
+      const before = lastVisibleCount;
       renderedCount += itemCount;
       listInstance.triggerHook("filter");
+      const added = lastVisibleCount - before;
+      if (added > 0) announceLiveRegion(wrap, `${added} more event${added === 1 ? "" : "s"} loaded.`);
     });
   }
   function isPrevDisabled(current, range, hidePastEvents) {
@@ -722,9 +751,11 @@
     if (feedPeriod !== "month" && feedPeriod !== "week") feedPeriod = "month";
     const feedDivider = attr(true, wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-divider`));
     const feedDividerToday = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID}-feed-divider-today`));
-    let direction = attr("upcoming", wrap.getAttribute(`data-ix-${ANIMATION_ID}-direction`)?.toLowerCase());
-    if (direction !== "upcoming" && direction !== "past") direction = "upcoming";
-    const container = entries[0].item.parentElement;
+    let filter = attr("upcoming", wrap.getAttribute(`data-ix-${ANIMATION_ID}-filter`)?.toLowerCase());
+    if (!["upcoming", "past", "all"].includes(filter)) filter = "upcoming";
+    let sortDirection = attr("", wrap.getAttribute(`data-ix-${ANIMATION_ID}-sort`)?.toLowerCase());
+    if (!["earliest-first", "latest-first"].includes(sortDirection)) sortDirection = void 0;
+    const container = wrap.querySelector(LIST_EL) || entries[0].item.parentElement;
     allCardItems(wrap).forEach((item) => {
       item.style.display = "none";
       watchAndKeepHidden(item);
@@ -734,12 +765,22 @@
     const loadMoreTarget = loadMoreWrap || loadMoreBtn;
     const dividerTemplate = wrap.querySelector(FEED_DIVIDER_EL);
     const dividerTextEl = dividerTemplate?.querySelector(FEED_DIVIDER_TEXT_EL);
-    debugLog("[event-feed] initFeed: duplicateRecurring =", duplicateRecurring, "| itemCount =", itemCount, "| feedPeriod =", feedPeriod, "| feedDivider =", feedDivider, "| feedDividerToday =", feedDividerToday, "| direction =", direction, "| loadMoreBtn found:", !!loadMoreBtn, "| dividerTemplate found:", !!dividerTemplate);
+    debugLog("[event-feed] initFeed: duplicateRecurring =", duplicateRecurring, "| itemCount =", itemCount, "| feedPeriod =", feedPeriod, "| feedDivider =", feedDivider, "| feedDividerToday =", feedDividerToday, "| filter =", filter, "| sort =", sortDirection || "(default)", "| loadMoreBtn found:", !!loadMoreBtn, "| dividerTemplate found:", !!dividerTemplate);
     if (feedDivider && !dividerTemplate) {
       console.warn('event-feed: feed-divider is enabled but no [data-ix-events="feed-divider"] element was found.', wrap);
     }
     let renderedCount = 0;
     let currentDividerMonthKey = null;
+    let allOccurrencesMerged = null;
+    function getAllOccurrencesMerged() {
+      if (allOccurrencesMerged) return allOccurrencesMerged;
+      const now = /* @__PURE__ */ new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const earliestAllowed = new Date(today.getFullYear() - ALL_RANGE_YEARS, today.getMonth(), today.getDate());
+      const cappedEnd = new Date(today.getFullYear() + ALL_RANGE_YEARS, today.getMonth(), today.getDate());
+      allOccurrencesMerged = mergeOccurrences(entries, earliestAllowed, cappedEnd, duplicateRecurring, filter, sortDirection);
+      return allOccurrencesMerged;
+    }
     function createDivider(text) {
       const divider = dividerTemplate.cloneNode(true);
       divider.classList.remove("u-hide");
@@ -752,13 +793,13 @@
       const now = /* @__PURE__ */ new Date();
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
       const targetCount = renderedCount + itemCount;
-      const merged = expandingWindowSearch({
+      const merged = filter === "all" ? getAllOccurrencesMerged() : expandingWindowSearch({
         anchor: today,
         period: feedPeriod,
-        direction,
+        direction: filter,
         targetCount,
         maxIterations: SEARCH_CAP,
-        search: (start, end) => mergeOccurrences(entries, start, end, duplicateRecurring, direction)
+        search: (start, end) => mergeOccurrences(entries, start, end, duplicateRecurring, filter, sortDirection)
       });
       const batch = merged.slice(renderedCount, targetCount);
       debugLog("[event-feed] loadMore: targetCount =", targetCount, "| total merged occurrences found:", merged.length, "| batch size:", batch.length);
@@ -772,7 +813,7 @@
           if (currentDividerMonthKey === null || monthKey !== currentDividerMonthKey) {
             const isFirstDividerEver = currentDividerMonthKey === null;
             const format = attr("MMMM, YYYY", dividerTextEl?.getAttribute("data-ix-events-date-format"));
-            const showTodayLabel = isFirstDividerEver && feedDividerToday && direction !== "past";
+            const showTodayLabel = isFirstDividerEver && feedDividerToday && filter === "upcoming";
             const text = showTodayLabel ? "Today" : formatOccurrenceDate(occurrence.start, format);
             container.appendChild(createDivider(text));
             currentDividerMonthKey = monthKey;
@@ -784,23 +825,30 @@
       if (batch.length < itemCount && loadMoreTarget) loadMoreTarget.style.display = "none";
     }
     loadMore();
-    loadMoreBtn?.addEventListener("click", loadMore);
+    loadMoreBtn?.addEventListener("click", () => {
+      const before = renderedCount;
+      loadMore();
+      const added = renderedCount - before;
+      if (added > 0) announceLiveRegion(wrap, `${added} more event${added === 1 ? "" : "s"} loaded.`);
+    });
   }
-  function mergeOccurrences(entries, rangeStart, rangeEnd, duplicateRecurring, direction = "upcoming") {
-    const isPast = direction === "past";
+  function mergeOccurrences(entries, rangeStart, rangeEnd, duplicateRecurring, filter = "upcoming", sortDirection) {
     const now = /* @__PURE__ */ new Date();
+    const effectiveSort = sortDirection || (filter === "past" ? "latest-first" : "earliest-first");
+    const isDescending = effectiveSort === "latest-first";
     const merged = [];
     entries.forEach(({ item, event }) => {
       let occurrences = getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
-      if (isPast) occurrences = occurrences.filter((occ) => occ.end < now);
-      if (!duplicateRecurring) occurrences = isPast ? occurrences.slice(-1) : occurrences.slice(0, 1);
+      if (filter === "past") occurrences = occurrences.filter((occ) => occ.end < now);
+      else if (filter === "upcoming") occurrences = occurrences.filter((occ) => occ.end >= now);
+      if (!duplicateRecurring) occurrences = filter === "past" ? occurrences.slice(-1) : occurrences.slice(0, 1);
       occurrences.forEach((occurrence) => merged.push({ item, event, occurrence }));
     });
     merged.sort((a, b) => {
       const dayDiff = startOfDay2(a.occurrence.start) - startOfDay2(b.occurrence.start);
-      if (dayDiff !== 0) return isPast ? -dayDiff : dayDiff;
+      if (dayDiff !== 0) return isDescending ? -dayDiff : dayDiff;
       if (a.event.showStartTime !== b.event.showStartTime) return a.event.showStartTime ? -1 : 1;
-      return isPast ? b.occurrence.start - a.occurrence.start : a.occurrence.start - b.occurrence.start;
+      return isDescending ? b.occurrence.start - a.occurrence.start : a.occurrence.start - b.occurrence.start;
     });
     return merged;
   }
@@ -846,6 +894,7 @@
   function readItemCount(wrap, defaultValue) {
     const raw = wrap.getAttribute(`data-ix-${ANIMATION_ID}-item-count`);
     if (raw === null || raw.trim() === "") return defaultValue;
+    if (raw.trim().toLowerCase() === "unlimited") return null;
     const n = Number(raw);
     return Number.isFinite(n) && n > 0 ? n : defaultValue;
   }
@@ -955,7 +1004,7 @@
   var LOAD_MORE_WRAP2 = '[data-ix-events="load-more-wrap"]';
   var LOAD_MORE_BTN2 = '[data-ix-events="load-more"]';
   var INITIALIZED_ATTR2 = "data-ix-events-initialized";
-  var ALL_RANGE_YEARS = 3;
+  var ALL_RANGE_YEARS2 = 3;
   function claimForInit2(wrap) {
     if (wrap.hasAttribute(INITIALIZED_ATTR2)) return false;
     wrap.setAttribute(INITIALIZED_ATTR2, "");
@@ -1037,28 +1086,33 @@
     el.style.display = "";
     applyOwnOrNestedDate(el, occurrence, event);
   }
-  function buildAllOccurrences(event) {
+  function buildAllOccurrences(event, sortDirection = "earliest-first") {
     const now = /* @__PURE__ */ new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const earliestAllowed = new Date(today.getFullYear() - ALL_RANGE_YEARS, today.getMonth(), today.getDate());
+    const earliestAllowed = new Date(today.getFullYear() - ALL_RANGE_YEARS2, today.getMonth(), today.getDate());
     const rangeStart = event.startDate > earliestAllowed ? event.startDate : earliestAllowed;
-    const cappedEnd = new Date(today.getFullYear() + ALL_RANGE_YEARS, today.getMonth(), today.getDate());
+    const cappedEnd = new Date(today.getFullYear() + ALL_RANGE_YEARS2, today.getMonth(), today.getDate());
     const rangeEnd = event.recurringEndDate && event.recurringEndDate < cappedEnd ? event.recurringEndDate : cappedEnd;
-    return getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
+    const isDescending = sortDirection === "latest-first";
+    return getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => isDescending ? b.start - a.start : a.start - b.start);
   }
   function initDatesList(listEl, event, listIndex) {
     const template = queryOwnAll(listEl, DATES_ITEM, DATES_LIST).find((el) => !el.hasAttribute(CLONE_ATTR)) || null;
     if (!template) return;
-    let filter = attr("upcoming", listEl.getAttribute(`data-ix-${ANIMATION_ID2}-dates-filter`)?.toLowerCase());
+    let filter = attr("upcoming", listEl.getAttribute(`data-ix-${ANIMATION_ID2}-filter`)?.toLowerCase());
     if (filter !== "upcoming" && filter !== "past" && filter !== "all") filter = "upcoming";
+    let sortDirection = attr("", listEl.getAttribute(`data-ix-${ANIMATION_ID2}-sort`)?.toLowerCase());
+    if (sortDirection !== "earliest-first" && sortDirection !== "latest-first") sortDirection = void 0;
+    const effectiveSort = sortDirection || (filter === "past" ? "latest-first" : "earliest-first");
+    const isDescending = effectiveSort === "latest-first";
     const itemCount = readItemCount(listEl, 12);
     const container = template.parentElement;
     template.style.display = "none";
     const loadMoreWrap = queryOwn(listEl, LOAD_MORE_WRAP2, DATES_LIST);
     const loadMoreBtn = queryOwn(loadMoreWrap || listEl, LOAD_MORE_BTN2, DATES_LIST);
     const loadMoreTarget = loadMoreWrap || loadMoreBtn;
-    debugLog("[event-detail] initDatesList: filter =", filter, "| itemCount =", itemCount, "| loadMoreBtn found:", !!loadMoreBtn);
-    const allOccurrences = filter === "all" ? buildAllOccurrences(event) : null;
+    debugLog("[event-detail] initDatesList: filter =", filter, "| sort =", effectiveSort, "| itemCount =", itemCount, "| loadMoreBtn found:", !!loadMoreBtn);
+    const allOccurrences = filter === "all" ? buildAllOccurrences(event, effectiveSort) : null;
     let renderedCount = 0;
     function searchDirected(targetCount) {
       const now = /* @__PURE__ */ new Date();
@@ -1073,7 +1127,7 @@
           const occurrences = getOccurrences(event, start, end).filter(
             (occ) => filter === "past" ? occ.end < now : occ.end >= now
           );
-          occurrences.sort((a, b) => filter === "past" ? b.start - a.start : a.start - b.start);
+          occurrences.sort((a, b) => isDescending ? b.start - a.start : a.start - b.start);
           return occurrences;
         }
       });
@@ -1097,7 +1151,12 @@
     }
     loadMore();
     if (renderedCount === 0) listEl.style.display = "none";
-    loadMoreBtn?.addEventListener("click", loadMore);
+    loadMoreBtn?.addEventListener("click", () => {
+      const before = renderedCount;
+      loadMore();
+      const added = renderedCount - before;
+      if (added > 0) announceLiveRegion(listEl, `${added} more date${added === 1 ? "" : "s"} loaded.`);
+    });
   }
 
   // src/calendar.js
@@ -1121,7 +1180,6 @@
   var HOVER_CARD = '[data-ix-events="hover-card"]';
   var FS_LIST_SELECTOR2 = '[fs-list-element="list"]';
   var SLUG_ATTR2 = "data-ix-events-slug";
-  var DISABLED_CLASS2 = "is-disabled";
   var HIDDEN_CLASS = "u-display-none";
   var INITIALIZED_ATTR3 = "data-ix-events-initialized";
   function claimForInit3(wrap) {
@@ -1169,6 +1227,13 @@
       console.warn('calendar: no [data-ix-events="grid"] with [data-ix-events="day-cell"] children found.', wrap);
       return;
     }
+    grid.setAttribute("role", "grid");
+    grid.setAttribute("aria-label", "Event calendar");
+    dayCells.forEach((cell, i) => {
+      cell.setAttribute("role", "gridcell");
+      cell.setAttribute("aria-rowindex", String(Math.floor(i / 7) + 1));
+      cell.setAttribute("aria-colindex", String(i % 7 + 1));
+    });
     const months = attr(6, wrap.getAttribute(`data-ix-${ANIMATION_ID3}-months`));
     let range = attr("month", wrap.getAttribute(`data-ix-${ANIMATION_ID3}-range`)?.toLowerCase());
     if (range !== "month" && range !== "week") range = "month";
@@ -1180,6 +1245,7 @@
     const showOutsideMonthEvents = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID3}-show-outside-month`));
     const hideInactiveRow = attr(false, wrap.getAttribute(`data-ix-${ANIMATION_ID3}-hide-inactive-row`));
     const label = wrap.querySelector(LABEL2);
+    label?.setAttribute("aria-live", "polite");
     const prevBtn = wrap.querySelector(PREV_BTN2);
     const nextBtn = wrap.querySelector(NEXT_BTN2);
     const todayBtn = wrap.querySelector(TODAY_BTN2);
@@ -1221,9 +1287,9 @@
     const expandedRows = /* @__PURE__ */ new Set();
     const hoverState = { activeCard: null };
     function updateNavState() {
-      if (prevBtn) prevBtn.classList.toggle(DISABLED_CLASS2, !canGoPrev(current));
-      if (nextBtn) nextBtn.classList.toggle(DISABLED_CLASS2, !canGoNext(current));
-      if (todayBtn) todayBtn.classList.toggle(DISABLED_CLASS2, isTodayActive(current));
+      setDisabledState(prevBtn, !canGoPrev(current));
+      setDisabledState(nextBtn, !canGoNext(current));
+      setDisabledState(todayBtn, isTodayActive(current));
     }
     function refresh() {
       if (label) {
@@ -1315,10 +1381,16 @@
   function buildHoverCardMap(wrap, map) {
     wrap.querySelectorAll(HOVER_CARD).forEach((card) => {
       unwrapFromHiddenAncestor(card, wrap);
+      disableCardFocusability(card);
       const slugEl = card.closest(`[${SLUG_ATTR2}]`);
       const slug = slugEl?.getAttribute(SLUG_ATTR2);
       if (slug) map.set(slug, card);
     });
+  }
+  var CARD_FOCUSABLE_SELECTOR = "a[href], button, input, select, textarea, [tabindex]";
+  function disableCardFocusability(card) {
+    const targets = card.matches(CARD_FOCUSABLE_SELECTOR) ? [card, ...card.querySelectorAll(CARD_FOCUSABLE_SELECTOR)] : [...card.querySelectorAll(CARD_FOCUSABLE_SELECTOR)];
+    targets.forEach((el) => el.setAttribute("tabindex", "-1"));
   }
   function resolveHoverCards(wrap, map, callback) {
     const list = wrap.querySelector(FS_LIST_SELECTOR2);
@@ -1338,11 +1410,16 @@
           buildHoverCardMap(wrap, map);
           callback();
         });
-        new MutationObserver(() => {
+        let quietTimer;
+        const observer = new MutationObserver(() => {
+          clearTimeout(quietTimer);
           const sizeBefore = map.size;
           buildHoverCardMap(wrap, map);
           if (map.size !== sizeBefore) callback();
-        }).observe(list, { childList: true, subtree: true });
+          quietTimer = setTimeout(() => observer.disconnect(), 2e3);
+        });
+        observer.observe(list, { childList: true, subtree: true });
+        quietTimer = setTimeout(() => observer.disconnect(), 2e3);
       }
     ]);
   }
@@ -1430,6 +1507,7 @@
       if (moreEl) {
         moreEl.textContent = "";
         moreEl.classList.remove("is-active");
+        moreEl.removeAttribute("aria-expanded");
       }
     });
     if (!pillTemplate) return;
@@ -1477,7 +1555,19 @@
       if (!moreEl) return;
       moreEl.textContent = `+${count} more`;
       moreEl.classList.add("is-active");
+      if (overflowMode === "expand") {
+        const row = Math.floor(i / 7);
+        moreEl.setAttribute("aria-expanded", expandedRows.has(row) ? "true" : "false");
+      }
     });
+    for (let i = 0; i < cellCount; i++) {
+      const cell = dayCells[i];
+      if (!cell) continue;
+      const eventCount = segmentsByDay[i].length + overflowCount[i];
+      const dateLabel = formatOccurrenceDate(cellDates[i].date, "dddd, MMMM D, YYYY");
+      const countLabel = eventCount === 0 ? "no events" : `${eventCount} event${eventCount === 1 ? "" : "s"}`;
+      cell.setAttribute("aria-label", `${dateLabel}, ${countLabel}`);
+    }
     const unmatchedSlugs = /* @__PURE__ */ new Set();
     segmentsByDay.forEach((daySegments, dayIndex) => {
       if (daySegments.length === 0) return;
@@ -1494,22 +1584,26 @@
         const pill = createPill(pillTemplate, seg, pos, linkFormat, `cal-${dayIndex}-${seg.lane}`);
         pillsEl.appendChild(pill);
         if (!hoverCardsBySlug.has(seg.event.slug)) unmatchedSlugs.add(seg.event.slug);
-        pill.addEventListener("mouseenter", () => {
+        const revealCard = () => {
           const card = hoverCardsBySlug.get(seg.event.slug);
-          debugLog("[calendar] pill mouseenter \u2014 event:", seg.event.name, "| slug:", seg.event.slug, "| card found:", !!card);
+          debugLog("[calendar] pill hover/focus \u2014 event:", seg.event.name, "| slug:", seg.event.slug, "| card found:", !!card);
           if (!card) return;
           if (hoverState.activeCard && hoverState.activeCard !== card) {
             hideHoverCard(hoverState.activeCard);
           }
           hoverState.activeCard = card;
           showHoverCard(card, seg.occurrence, seg.event, pill, wrap, hoverState);
-        });
-        pill.addEventListener("mouseleave", () => {
+        };
+        const dismissCard = () => {
           const card = hoverCardsBySlug.get(seg.event.slug);
-          debugLog("[calendar] pill mouseleave \u2014 event:", seg.event.name);
+          debugLog("[calendar] pill unhover/blur \u2014 event:", seg.event.name);
           hideHoverCard(card);
           if (hoverState.activeCard === card) hoverState.activeCard = null;
-        });
+        };
+        pill.addEventListener("mouseenter", revealCard);
+        pill.addEventListener("mouseleave", dismissCard);
+        pill.addEventListener("focus", revealCard);
+        pill.addEventListener("blur", dismissCard);
         nextLane++;
       });
     });
@@ -1602,11 +1696,15 @@
     const { event, occurrence } = segment;
     const clone = pillTemplate.cloneNode(true);
     uniquifyIds(clone, suffix);
-    if (pos === "start" || pos === "single") {
+    const hasContent = pos === "start" || pos === "single";
+    if (hasContent) {
       setDateFields(clone, occurrence, event);
       Object.entries(PILL_TEXT_FIELDS).forEach(([attrName, getValue]) => {
         setField(clone, `[data-ix-events="${attrName}"]`, getValue(event));
       });
+    } else {
+      clone.setAttribute("tabindex", "-1");
+      clone.setAttribute("aria-hidden", "true");
     }
     clone.href = linkFormat.replace("{slug}", event.slug || "");
     clone.classList.add(`is-${pos}`);
@@ -1702,10 +1800,17 @@
   }
 
   // src/index.js
+  function runSafely(name, fn) {
+    try {
+      fn();
+    } catch (e) {
+      console.error(`events: ${name}() threw and was stopped \u2014 other views on this page are unaffected.`, e);
+    }
+  }
   document.addEventListener("DOMContentLoaded", function() {
-    eventList();
-    eventFeed();
-    eventDetail();
-    calendar();
+    runSafely("eventList", eventList);
+    runSafely("eventFeed", eventFeed);
+    runSafely("eventDetail", eventDetail);
+    runSafely("calendar", calendar);
   });
 })();
