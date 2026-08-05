@@ -28,6 +28,17 @@ import {
 // data (e.g. a smaller, pre-filtered Collection List) purely by nesting a
 // data-wrap inside its own wrap — no attribute needed either way.
 //
+// A wrap whose cards are ALL combined-mode (every card carries its own
+// [data-ix-events="data"], see mode A below) never calls whenEvents() at
+// all — needsSharedData() checks this upfront. This matters for performance:
+// whenEvents() retries for up to MAX_ATTEMPTS * RETRY_DELAY (6s) before
+// giving up if no data-wrap exists ANYWHERE on the page, which is a real,
+// confirmed-live scenario for a small combined-mode showcase Feed/List
+// dropped on a page that has no shared data-wrap Collection List at all
+// (e.g. a homepage). Without the skip, that instance visibly took ~6
+// seconds to render its first cards even though it never needed the shared
+// lookup's result in the first place.
+//
 // List View delegates its DOM lifecycle (filtering, item creation, render) to
 // Finsweet Attributes' List solution — https://finsweet.com/attributes/list-filter,
 // API: https://github.com/finsweet/attributes/blob/master/packages/list/README.md
@@ -267,9 +278,14 @@ export const eventList = function () {
   // resolve to its own local data-wrap, or fall back to the same page-level
   // one, per event-data.js's resolution rule. Needed for slug matching in
   // the separate-Collection-List case (B); combined-mode items (A) never
-  // need this, since they carry their own JSON.
+  // need this, since they carry their own JSON — skipped entirely via
+  // needsSharedData() below so a combined-mode-only wrap never blocks on
+  // whenEvents()'s retry loop resolving a shared data-wrap that may not even
+  // exist on this page (confirmed live: up to MAX_ATTEMPTS * RETRY_DELAY,
+  // 6 seconds, of pure wasted retrying before it gave up and proceeded
+  // anyway with an eventsBySlug map nothing ended up using).
   wraps.forEach((wrap) => {
-    whenEvents(wrap, (events) => {
+    const withEvents = (events) => {
       debugLog('[event-list] whenEvents callback fired, events received:', events.length, events);
       const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
 
@@ -279,7 +295,14 @@ export const eventList = function () {
         if (!config) return;
         initList(config, listInstance);
       });
-    });
+    };
+
+    if (needsSharedData(wrap)) {
+      whenEvents(wrap, withEvents);
+    } else {
+      debugLog('[event-list] wrap is combined-mode only — skipping whenEvents()', wrap);
+      withEvents([]);
+    }
   });
 };
 
@@ -498,9 +521,10 @@ export const eventFeed = function () {
   debugLog('[event-feed] wraps with layout="feed" found:', wraps.length, wraps);
   if (wraps.length === 0) return;
 
-  // whenEvents is called per-wrap — see the matching note in eventList().
+  // whenEvents is called per-wrap — see the matching note (and needsSharedData
+  // skip) in eventList().
   wraps.forEach((wrap) => {
-    whenEvents(wrap, (events) => {
+    const withEvents = (events) => {
       debugLog('[event-feed] whenEvents callback fired, events received:', events.length, events);
       const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
 
@@ -509,7 +533,14 @@ export const eventFeed = function () {
       // pagination has finished. `required: false` means proceed immediately
       // if there's no fs-list-element="list" on this wrap at all.
       whenListReady(wrap, false, () => initFeed(wrap, eventsBySlug));
-    });
+    };
+
+    if (needsSharedData(wrap)) {
+      whenEvents(wrap, withEvents);
+    } else {
+      debugLog('[event-feed] wrap is combined-mode only — skipping whenEvents()', wrap);
+      withEvents([]);
+    }
   });
 };
 
@@ -637,6 +668,16 @@ export function mergeOccurrences(entries, rangeStart, rangeEnd, duplicateRecurri
 
 // ── Shared: entries, Finsweet resolution, occurrence cards ────────────────
 
+// True if any card item in wrap is separate-mode (relies on eventsBySlug —
+// i.e. has no local [data-ix-events="data"] of its own). A combined-mode-only
+// wrap (every card carries its own JSON) never needs whenEvents()'s shared
+// data-wrap lookup at all, so callers use this to skip it entirely rather
+// than block on a retry loop resolving a data-wrap that may not exist
+// anywhere on the page.
+function needsSharedData(wrap) {
+  return [...wrap.querySelectorAll(ITEM)].some((item) => item.querySelector(CARD_EL) && !item.querySelector(DATA_EL));
+}
+
 // Item↔event pairing, combined (A) or separate (B) mode — used by both views.
 function buildEntries(wrap, eventsBySlug) {
   const cardItems = [...wrap.querySelectorAll(ITEM)].filter((item) => item.querySelector(CARD_EL));
@@ -688,9 +729,15 @@ export function readItemCount(wrap, defaultValue) {
 // falls back to a bare [data-ix-events="load-more"] button found anywhere in
 // wrap (and the button itself is what gets shown/hidden) — keeps Feed View's
 // original, already-shipped flat markup (no wrap) working unchanged.
+// Both lookups exclude elements belonging to a NESTED [data-ix-events="wrap"]
+// (closest(WRAP) === wrap) — needed now that event-detail.js's wrap can
+// legitimately contain another instance's wrap inside it (e.g. an "Other
+// Upcoming Events" Feed section on the same page), which would otherwise let
+// this wrap's own resolveLoadMore() steal that nested instance's button.
 export function resolveLoadMore(wrap) {
-  const loadMoreWrap = wrap.querySelector(LOAD_MORE_WRAP);
-  const loadMoreBtn = (loadMoreWrap || wrap).querySelector(LOAD_MORE_BTN);
+  const loadMoreWrap = [...wrap.querySelectorAll(LOAD_MORE_WRAP)].find((el) => el.closest(WRAP) === wrap) || null;
+  const scope = loadMoreWrap || wrap;
+  const loadMoreBtn = [...scope.querySelectorAll(LOAD_MORE_BTN)].find((el) => el.closest(WRAP) === wrap) || null;
   return { loadMoreWrap, loadMoreBtn };
 }
 

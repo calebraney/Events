@@ -260,18 +260,26 @@ function formatClockTime(date) {
 // explicitly un-hidden first in case a previous render (or a shared,
 // reused DOM node — see List View's duplicate-recurring="false" mode) had
 // hidden it.
+// Applies date-format text/visibility to ONE element directly, reading its
+// own data-ix-events-date-format — the per-element logic setDateFields()
+// runs for every matched descendant. Exported separately so a caller can
+// apply it to a specific element that isn't itself found via the
+// [data-ix-events="date"] role (see event-detail.js's next-occurrence
+// self-target fallback).
+export function applyDateFormat(el, occurrence, event) {
+  const format = attr('MMMM D, YYYY', el.getAttribute('data-ix-events-date-format'));
+  if (isTimeFormat(format)) {
+    const text = formatTimeOnly(occurrence, event, format.trim().toUpperCase() === 'TIME-SHORT');
+    el.style.display = text === null ? 'none' : '';
+    el.textContent = text ?? '';
+    return;
+  }
+  el.style.display = '';
+  el.textContent = isFullDateFormat(format)
+    ? formatFullDate(occurrence, event)
+    : formatOccurrenceDate(occurrence.start, format);
+}
+
 export function setDateFields(root, occurrence, event) {
-  root.querySelectorAll(DATE_EL).forEach((el) => {
-    const format = attr('MMMM D, YYYY', el.getAttribute('data-ix-events-date-format'));
-    if (isTimeFormat(format)) {
-      const text = formatTimeOnly(occurrence, event, format.trim().toUpperCase() === 'TIME-SHORT');
-      el.style.display = text === null ? 'none' : '';
-      el.textContent = text ?? '';
-      return;
-    }
-    el.style.display = '';
-    el.textContent = isFullDateFormat(format)
-      ? formatFullDate(occurrence, event)
-      : formatOccurrenceDate(occurrence.start, format);
-  });
+  root.querySelectorAll(DATE_EL).forEach((el) => applyDateFormat(el, occurrence, event));
 }

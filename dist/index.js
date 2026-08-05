@@ -453,18 +453,19 @@
     const minuteText = minutes === 0 ? "" : `:${pad2(minutes)}`;
     return `${h12}${minuteText}${period}`;
   }
+  function applyDateFormat(el, occurrence, event) {
+    const format = attr("MMMM D, YYYY", el.getAttribute("data-ix-events-date-format"));
+    if (isTimeFormat(format)) {
+      const text = formatTimeOnly(occurrence, event, format.trim().toUpperCase() === "TIME-SHORT");
+      el.style.display = text === null ? "none" : "";
+      el.textContent = text ?? "";
+      return;
+    }
+    el.style.display = "";
+    el.textContent = isFullDateFormat(format) ? formatFullDate(occurrence, event) : formatOccurrenceDate(occurrence.start, format);
+  }
   function setDateFields(root, occurrence, event) {
-    root.querySelectorAll(DATE_EL).forEach((el) => {
-      const format = attr("MMMM D, YYYY", el.getAttribute("data-ix-events-date-format"));
-      if (isTimeFormat(format)) {
-        const text = formatTimeOnly(occurrence, event, format.trim().toUpperCase() === "TIME-SHORT");
-        el.style.display = text === null ? "none" : "";
-        el.textContent = text ?? "";
-        return;
-      }
-      el.style.display = "";
-      el.textContent = isFullDateFormat(format) ? formatFullDate(occurrence, event) : formatOccurrenceDate(occurrence.start, format);
-    });
+    root.querySelectorAll(DATE_EL).forEach((el) => applyDateFormat(el, occurrence, event));
   }
 
   // src/event-list.js
@@ -494,7 +495,7 @@
     debugLog('[event-list] wraps with layout="list" found:', wraps.length, wraps);
     if (wraps.length === 0) return;
     wraps.forEach((wrap) => {
-      whenEvents(wrap, (events) => {
+      const withEvents = (events) => {
         debugLog("[event-list] whenEvents callback fired, events received:", events.length, events);
         const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
         whenListReady(wrap, true, (listInstance) => {
@@ -503,7 +504,13 @@
           if (!config) return;
           initList(config, listInstance);
         });
-      });
+      };
+      if (needsSharedData(wrap)) {
+        whenEvents(wrap, withEvents);
+      } else {
+        debugLog("[event-list] wrap is combined-mode only \u2014 skipping whenEvents()", wrap);
+        withEvents([]);
+      }
     });
   };
   function buildListConfig(wrap, list, eventsBySlug) {
@@ -671,11 +678,17 @@
     debugLog('[event-feed] wraps with layout="feed" found:', wraps.length, wraps);
     if (wraps.length === 0) return;
     wraps.forEach((wrap) => {
-      whenEvents(wrap, (events) => {
+      const withEvents = (events) => {
         debugLog("[event-feed] whenEvents callback fired, events received:", events.length, events);
         const eventsBySlug = new Map(events.map((event) => [event.slug, event]));
         whenListReady(wrap, false, () => initFeed(wrap, eventsBySlug));
-      });
+      };
+      if (needsSharedData(wrap)) {
+        whenEvents(wrap, withEvents);
+      } else {
+        debugLog("[event-feed] wrap is combined-mode only \u2014 skipping whenEvents()", wrap);
+        withEvents([]);
+      }
     });
   };
   function initFeed(wrap, eventsBySlug) {
@@ -768,6 +781,9 @@
     });
     return merged;
   }
+  function needsSharedData(wrap) {
+    return [...wrap.querySelectorAll(ITEM2)].some((item) => item.querySelector(CARD_EL) && !item.querySelector(DATA_EL2));
+  }
   function buildEntries(wrap, eventsBySlug) {
     const cardItems = [...wrap.querySelectorAll(ITEM2)].filter((item) => item.querySelector(CARD_EL));
     if (cardItems.length === 0) return [];
@@ -802,8 +818,9 @@
     return Number.isFinite(n) && n > 0 ? n : defaultValue;
   }
   function resolveLoadMore(wrap) {
-    const loadMoreWrap = wrap.querySelector(LOAD_MORE_WRAP);
-    const loadMoreBtn = (loadMoreWrap || wrap).querySelector(LOAD_MORE_BTN);
+    const loadMoreWrap = [...wrap.querySelectorAll(LOAD_MORE_WRAP)].find((el) => el.closest(WRAP2) === wrap) || null;
+    const scope = loadMoreWrap || wrap;
+    const loadMoreBtn = [...scope.querySelectorAll(LOAD_MORE_BTN)].find((el) => el.closest(WRAP2) === wrap) || null;
     return { loadMoreWrap, loadMoreBtn };
   }
   function whenListReady(wrap, required, callback) {
@@ -858,8 +875,25 @@
   var WRAP3 = '[data-ix-events="wrap"]';
   var DATA_EL3 = '[data-ix-events="data"]';
   var NEXT_OCCURRENCE_EL = '[data-ix-events="next-occurrence"]';
+  var OCCURRENCE_LIST = '[data-ix-events="occurrence-list"]';
   var OCCURRENCE_ITEM = '[data-ix-events="occurrence-item"]';
+  var DATE_EL2 = '[data-ix-events="date"]';
+  var LOAD_MORE_WRAP2 = '[data-ix-events="load-more-wrap"]';
+  var LOAD_MORE_BTN2 = '[data-ix-events="load-more"]';
   var ALL_RANGE_YEARS = 3;
+  function queryOwn(scope, selector, boundarySelector = WRAP3) {
+    return [...scope.querySelectorAll(selector)].find((el) => el.closest(boundarySelector) === scope) || null;
+  }
+  function queryOwnAll(scope, selector, boundarySelector = WRAP3) {
+    return [...scope.querySelectorAll(selector)].filter((el) => el.closest(boundarySelector) === scope);
+  }
+  function applyOwnOrNestedDate(el, occurrence, event) {
+    if (el.querySelector(DATE_EL2)) {
+      setDateFields(el, occurrence, event);
+    } else {
+      applyDateFormat(el, occurrence, event);
+    }
+  }
   var eventDetail = function() {
     const wraps = [...document.querySelectorAll(WRAP3)].filter(
       (wrap) => wrap.getAttribute("data-ix-events-layout") === DETAIL_LAYOUT
@@ -870,11 +904,11 @@
       const event = parseWrapEvent(wrap);
       if (!event) return;
       renderNextOccurrence(wrap, event);
-      initOccurrenceList(wrap, event);
+      queryOwnAll(wrap, OCCURRENCE_LIST).forEach((listEl, i) => initOccurrenceList(listEl, event, i));
     });
   };
   function parseWrapEvent(wrap) {
-    const dataEl = wrap.querySelector(DATA_EL3);
+    const dataEl = queryOwn(wrap, DATA_EL3);
     if (!dataEl) {
       console.warn('event-detail: no [data-ix-events="data"] found in this wrap.', wrap);
       return null;
@@ -908,7 +942,7 @@
     return results[0] || null;
   }
   function renderNextOccurrence(wrap, event) {
-    const el = wrap.querySelector(NEXT_OCCURRENCE_EL);
+    const el = queryOwn(wrap, NEXT_OCCURRENCE_EL);
     if (!el) return;
     const occurrence = findNextOccurrence(event);
     debugLog("[event-detail] next occurrence for", event.name, ":", occurrence);
@@ -917,7 +951,7 @@
       return;
     }
     el.style.display = "";
-    setDateFields(el, occurrence, event);
+    applyOwnOrNestedDate(el, occurrence, event);
   }
   function buildAllOccurrences(event) {
     const now = /* @__PURE__ */ new Date();
@@ -928,15 +962,16 @@
     const rangeEnd = event.recurringEndDate && event.recurringEndDate < cappedEnd ? event.recurringEndDate : cappedEnd;
     return getOccurrences(event, rangeStart, rangeEnd).sort((a, b) => a.start - b.start);
   }
-  function initOccurrenceList(wrap, event) {
-    const template = wrap.querySelector(OCCURRENCE_ITEM);
+  function initOccurrenceList(listEl, event, listIndex) {
+    const template = queryOwn(listEl, OCCURRENCE_ITEM, OCCURRENCE_LIST);
     if (!template) return;
-    let filter = attr("upcoming", wrap.getAttribute(`data-ix-${ANIMATION_ID2}-detail-filter`)?.toLowerCase());
+    let filter = attr("upcoming", listEl.getAttribute(`data-ix-${ANIMATION_ID2}-detail-filter`)?.toLowerCase());
     if (filter !== "upcoming" && filter !== "past" && filter !== "all") filter = "upcoming";
-    const itemCount = readItemCount(wrap, 12);
+    const itemCount = readItemCount(listEl, 12);
     const container = template.parentElement;
     template.style.display = "none";
-    const { loadMoreWrap, loadMoreBtn } = resolveLoadMore(wrap);
+    const loadMoreWrap = queryOwn(listEl, LOAD_MORE_WRAP2, OCCURRENCE_LIST);
+    const loadMoreBtn = queryOwn(loadMoreWrap || listEl, LOAD_MORE_BTN2, OCCURRENCE_LIST);
     const loadMoreTarget = loadMoreWrap || loadMoreBtn;
     debugLog("[event-detail] initOccurrenceList: filter =", filter, "| itemCount =", itemCount, "| loadMoreBtn found:", !!loadMoreBtn);
     const allOccurrences = filter === "all" ? buildAllOccurrences(event) : null;
@@ -969,12 +1004,15 @@
         return;
       }
       batch.forEach((occurrence, i) => {
-        container.appendChild(createOccurrenceCard(template, occurrence, event, `detail-${renderedCount + i}`));
+        const clone = createOccurrenceCard(template, occurrence, event, `detail-${listIndex}-${renderedCount + i}`);
+        applyOwnOrNestedDate(clone, occurrence, event);
+        container.appendChild(clone);
       });
       renderedCount += batch.length;
       if (batch.length < itemCount && loadMoreTarget) loadMoreTarget.style.display = "none";
     }
     loadMore();
+    if (renderedCount === 0) listEl.style.display = "none";
     loadMoreBtn?.addEventListener("click", loadMore);
   }
 
